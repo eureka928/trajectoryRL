@@ -1,6 +1,7 @@
 """Validator configuration."""
 
 import os
+import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional
@@ -53,6 +54,7 @@ class ValidatorConfig:
     clawbench_path: Path = field(
         default_factory=lambda: Path(__file__).parent.parent.parent.parent / "clawbench"
     )
+    clawbench_commit: str = "b718230cb201fc0a4c28d12e011b1663db07d8f7"  # v0.3.0
     scenarios: List[str] = field(
         default_factory=lambda: [
             "client_escalation",
@@ -100,11 +102,36 @@ class ValidatorConfig:
         # Validate clawbench path
         if not self.clawbench_path.exists():
             raise ValueError(
-                f"clawbench_path does not exist: {self.clawbench_path}"
+                f"clawbench_path does not exist: {self.clawbench_path}\n"
+                f"Run: git submodule update --init --recursive"
             )
         if not self.scenarios_path.exists():
             raise ValueError(
                 f"scenarios_path does not exist: {self.scenarios_path}"
+            )
+
+        # Verify clawbench version
+        try:
+            result = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=self.clawbench_path,
+                capture_output=True,
+                text=True,
+                check=True
+            )
+            actual_commit = result.stdout.strip()
+
+            if actual_commit != self.clawbench_commit:
+                raise ValueError(
+                    f"ClawBench version mismatch!\n"
+                    f"Expected: {self.clawbench_commit} (v0.3.0)\n"
+                    f"Actual:   {actual_commit}\n"
+                    f"Run: cd {self.clawbench_path} && git checkout {self.clawbench_commit}"
+                )
+        except subprocess.CalledProcessError as e:
+            raise ValueError(
+                f"Failed to verify clawbench version: {e}\n"
+                f"Ensure {self.clawbench_path} is a valid git repository"
             )
 
     @classmethod

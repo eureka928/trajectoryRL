@@ -62,8 +62,8 @@ TrajectoryRL employs three layers of protection against copy-paste attacks:
 ### For Validators
 
 ```bash
-# 1. Clone repo
-git clone https://github.com/trajectoryRL/trajectoryrl.git
+# 1. Clone repo with submodules
+git clone --recursive https://github.com/trajectoryRL/trajectoryrl.git
 cd trajectoryrl
 
 # 2. Install
@@ -76,6 +76,8 @@ cp .env.example .env
 # 4. Run validator
 python neurons/validator.py
 ```
+
+> **Note**: ClawBench is pinned as a git submodule to **v0.3.0** (`b718230`) for reproducible consensus across validators.
 
 ### For Miners
 
@@ -115,6 +117,7 @@ trajectoryrl/
 │   ├── utils/                 # Shared utilities
 │   │   ├── config.py          # Configuration
 │   │   ├── clawbench.py       # ClawBench integration
+│   │   ├── github.py          # GitHub verification
 │   │   └── opp_schema.py      # OPP v1 validation
 │   └── scoring/               # Scoring logic
 │       └── __init__.py        # Score aggregation
@@ -123,12 +126,18 @@ trajectoryrl/
 │   ├── validator.py           # Validator node
 │   └── miner.py               # Miner node
 │
+├── clawbench/                 # Git submodule (pinned to v0.3.0)
+│   ├── scenarios/             # Scenario definitions
+│   ├── fixtures/              # Mock data
+│   └── clawbench/             # Evaluation harness
+│
 ├── docker/                    # Docker deployment
 │   ├── Dockerfile.validator
 │   └── docker-compose.yml     # Includes ClawBench
 │
 ├── tests/                     # Test suite
 ├── docs/                      # Documentation
+├── .gitmodules                # Submodule configuration
 ├── pyproject.toml             # Package definition
 └── README.md                  # This file
 ```
@@ -249,10 +258,15 @@ TrajectoryRL uses [ClawBench](https://github.com/trajectoryRL/clawbench) for det
 - **Regex scoring** — No LLM judge, fully reproducible
 - **Mock tools** — No real API calls, sandboxed execution
 
-Validators must have ClawBench cloned as a sibling directory:
-```bash
-git clone https://github.com/trajectoryRL/clawbench.git ../clawbench
-```
+### Version Pinning
+
+ClawBench is **pinned as a git submodule** to ensure validator consensus:
+
+- **Version**: v0.3.0 (commit `b718230`)
+- **Automatic**: Cloned with `git clone --recursive`
+- **Update**: `git submodule update --init --recursive`
+
+This ensures all validators evaluate packs with identical scoring logic, preventing consensus failures from version drift.
 
 ## Development
 
@@ -260,8 +274,11 @@ git clone https://github.com/trajectoryRL/clawbench.git ../clawbench
 
 ```bash
 # Clone with submodules
-git clone https://github.com/trajectoryRL/trajectoryrl.git
+git clone --recursive https://github.com/trajectoryRL/trajectoryrl.git
 cd trajectoryrl
+
+# If you already cloned without --recursive:
+git submodule update --init --recursive
 
 # Install in editable mode with dev dependencies
 pip install -e ".[dev]"
