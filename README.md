@@ -44,7 +44,8 @@ TrajectoryRL employs three layers of protection against copy-paste attacks:
 
 1. **GitHub-Based Submission**
    - Miners publish packs to public repositories FIRST
-   - Git commit timestamps provide cryptographic proof of originality
+   - Validators verify **server-side push timestamps** via GitHub API (not forgeable git dates)
+   - Uses Events API + Compare API (public, no auth required)
    - Validators independently clone repos and verify hashes
 
 2. **Winner-Take-All**
@@ -194,7 +195,7 @@ The `docker-compose.yml` automatically starts all required services:
 2. **Verify GitHub submission**:
    - Clone/update miner's public repository
    - Verify commit exists and extract pack
-   - Verify commit timestamp < on-chain submission time
+   - Verify server-side push timestamp (via GitHub API) < on-chain submission time
    - Verify `sha256(pack_json) == pack_hash`
 3. **Run ClawBench scenarios**:
    - `client_escalation` — P0 incident response

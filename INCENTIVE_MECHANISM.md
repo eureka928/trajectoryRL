@@ -137,7 +137,7 @@ Winner is determined by highest score with first-mover protection:
 winner = argmax(final_score[miner])
          subject to:
            - final_score[miner] > current_best_score + δ (if not first)
-           - git_commit_timestamp < on_chain_submission_time
+           - github_push_timestamp < on_chain_submission_time
            - valid public GitHub repo
 
 weight[winner] = 1.0
@@ -367,7 +367,7 @@ Miners must follow this submission flow:
 **Step 1: Publish to GitHub**
 - Create a public GitHub repository
 - Commit PolicyBundle (AGENTS.md, SOUL.md, etc.) to the repo
-- Git commit creates cryptographic timestamp proof
+- Push to GitHub — the server-side push timestamp establishes precedence
 
 **Step 2: Submit On-Chain**
 - Submit git commit hash to Bittensor subnet
@@ -378,12 +378,13 @@ Miners must follow this submission flow:
 Validators verify:
 1. Repository is publicly accessible
 2. Commit hash exists and is valid
-3. Commit timestamp is before on-chain submission
+3. **Server-side push timestamp** (via GitHub API) is before on-chain submission
 4. Pack content matches `pack_hash`
 5. PolicyBundle passes schema validation
 
-**Why Public GitHub?**
-- Git timestamps prove chronological order
+**Why Public GitHub + Server-Side Timestamps?**
+- GitHub API push timestamps are server-controlled and cannot be forged
+- Git committer dates (`git commit --date`) are NOT trusted — only used for divergence detection
 - Public repos prevent retroactive changes
 - Community can audit and learn from winning policies
 - Commit history creates innovation trail
@@ -413,7 +414,7 @@ new_score > current_best_score + δ
 Where:
 - **δ** = 0.05 (5% improvement threshold)
 - **current_best_score** = score of the FIRST submission that achieved this level
-- Chronological order determined by git commit timestamp
+- Chronological order determined by **GitHub server-side push timestamp** (not forgeable git commit date)
 
 **Example Timeline**:
 ```
@@ -509,20 +510,27 @@ At $10 alpha: $30,000 revenue (6x ROI)
 
 ## Anti-Gaming Measures
 
-### 1. Public GitHub Timestamps
+### 1. Server-Side Push Timestamps
 
-**Enforcement**: All submissions must be git commits in public repos with verifiable timestamps
+**Enforcement**: All submissions must be git commits in public repos; validators verify using **GitHub's server-side push timestamps** (not git committer dates)
 
 **Prevents**:
+- `git commit --date` / `GIT_COMMITTER_DATE` timestamp forgery
 - Retroactive pack changes after seeing validator feedback
 - Private optimization followed by submission date manipulation
 - Claims of earlier innovation without proof
 
 **How it works**:
 - Git commit SHA creates cryptographic link to exact code state
-- GitHub timestamp is trusted third-party proof of submission time
-- Validators reject commits with timestamps after on-chain submission
+- Validators query **GitHub API** for the server-recorded push time:
+  1. **REST Events API** — `PushEvent.created_at` (no auth for public repos)
+  2. **GraphQL API** — `Commit.pushedDate` (requires `GITHUB_TOKEN`)
+- These timestamps are set by GitHub's servers, not by the committer
+- Validators reject pushes with server timestamp after on-chain submission
+- Large divergence between git committer date and push date is logged as a forgery warning
 - Public repos allow community audit and verification
+
+**Validator requirement**: Set `GITHUB_TOKEN` env var for reliable GraphQL-based verification. Without it, only the REST Events API is available (limited to last 90 days, 60 req/hr unauthenticated).
 
 ### 2. First-Mover Advantage (δ Threshold)
 
@@ -697,7 +705,7 @@ weight[all_others] = 0.0
 
 where winner = miner with highest score that satisfies:
   - score > previous_best + δ (if not first)
-  - git_timestamp < on_chain_submission_time
+  - github_push_timestamp < on_chain_submission_time (server-side, not forgeable)
   - public GitHub repo with valid commit
 ```
 

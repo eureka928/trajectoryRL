@@ -85,7 +85,8 @@ class TrajectoryValidator:
         # Initialize GitHub verifier
         logger.info("Initializing GitHub verifier...")
         self.github_verifier = GitHubVerifier(
-            cache_dir=config.log_dir / "git_cache"
+            cache_dir=config.log_dir / "git_cache",
+            github_token=config.github_token,
         )
 
         # Pack cache (content-addressed)

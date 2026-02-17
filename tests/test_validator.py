@@ -492,6 +492,13 @@ class TestGitHubVerifier:
             verifier = GitHubVerifier(cache_dir=cache)
             assert cache.exists()
 
+    def test_init_with_token(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            verifier = GitHubVerifier(
+                cache_dir=Path(tmpdir), github_token="ghp_test123"
+            )
+            assert verifier.github_token == "ghp_test123"
+
     def test_verify_commit_exists_invalid(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             verifier = GitHubVerifier(cache_dir=Path(tmpdir))
@@ -512,6 +519,430 @@ class TestGitHubVerifier:
                 )
             )
             assert result is None
+
+    # ---------------------------------------------------------------
+    # _parse_github_url
+    # ---------------------------------------------------------------
+
+    def test_parse_github_url_basic(self):
+        owner, repo = GitHubVerifier._parse_github_url(
+            "https://github.com/alice/my-pack"
+        )
+        assert owner == "alice"
+        assert repo == "my-pack"
+
+    def test_parse_github_url_trailing_slash(self):
+        owner, repo = GitHubVerifier._parse_github_url(
+            "https://github.com/alice/my-pack/"
+        )
+        assert owner == "alice"
+        assert repo == "my-pack"
+
+    def test_parse_github_url_dot_git(self):
+        owner, repo = GitHubVerifier._parse_github_url(
+            "https://github.com/alice/my-pack.git"
+        )
+        assert owner == "alice"
+        assert repo == "my-pack"
+
+    # ---------------------------------------------------------------
+    # _get_push_timestamp_events_api (mocked)
+    # ---------------------------------------------------------------
+
+    def test_events_api_finds_commit_via_head(self):
+        """Events API finds commit as the head of a PushEvent (fast path)."""
+        commit_sha = "a" * 40
+
+        mock_events = [
+            {
+                "type": "CreateEvent",
+                "created_at": "2026-02-10T10:00:00Z",
+                "payload": {},
+            },
+            {
+                "type": "PushEvent",
+                "created_at": "2026-02-15T14:30:00Z",
+                "payload": {
+                    "repository_id": 123,
+                    "push_id": 456,
+                    "ref": "refs/heads/main",
+                    "head": commit_sha,
+                    "before": "b" * 40,
+                },
+            },
+        ]
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            verifier = GitHubVerifier(cache_dir=Path(tmpdir))
+
+            with patch("httpx.AsyncClient") as MockClient:
+                mock_resp = MagicMock()
+                mock_resp.status_code = 200
+                mock_resp.json.return_value = mock_events
+
+                mock_client_instance = AsyncMock()
+                mock_client_instance.get.return_value = mock_resp
+                mock_client_instance.__aenter__ = AsyncMock(
+                    return_value=mock_client_instance
+                )
+                mock_client_instance.__aexit__ = AsyncMock(return_value=False)
+                MockClient.return_value = mock_client_instance
+
+                ts = asyncio.get_event_loop().run_until_complete(
+                    verifier._get_push_timestamp_events_api("alice", "repo", commit_sha)
+                )
+
+            assert ts is not None
+            from datetime import datetime, timezone
+            expected = datetime(2026, 2, 15, 14, 30, 0, tzinfo=timezone.utc).timestamp()
+            assert abs(ts - expected) < 1
+
+    def test_events_api_finds_commit_via_compare(self):
+        """Events API finds commit via Compare API when head doesn't match."""
+        commit_sha = "a" * 40
+        head_sha = "c" * 40
+        before_sha = "b" * 40
+
+        mock_events = [
+            {
+                "type": "PushEvent",
+                "created_at": "2026-02-15T14:30:00Z",
+                "payload": {
+                    "ref": "refs/heads/main",
+                    "head": head_sha,
+                    "before": before_sha,
+                },
+            },
+        ]
+
+        # Compare API response lists commits in the push range
+        mock_compare = {
+            "commits": [
+                {"sha": commit_sha},
+                {"sha": head_sha},
+            ]
+        }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            verifier = GitHubVerifier(cache_dir=Path(tmpdir))
+
+            with patch("httpx.AsyncClient") as MockClient:
+                # Events API response
+                mock_events_resp = MagicMock()
+                mock_events_resp.status_code = 200
+                mock_events_resp.json.return_value = mock_events
+
+                # Compare API response
+                mock_compare_resp = MagicMock()
+                mock_compare_resp.status_code = 200
+                mock_compare_resp.json.return_value = mock_compare
+
+                mock_client_instance = AsyncMock()
+                mock_client_instance.get.side_effect = [
+                    mock_events_resp,   # events page 1
+                    mock_compare_resp,  # compare API call
+                ]
+                mock_client_instance.__aenter__ = AsyncMock(
+                    return_value=mock_client_instance
+                )
+                mock_client_instance.__aexit__ = AsyncMock(return_value=False)
+                MockClient.return_value = mock_client_instance
+
+                ts = asyncio.get_event_loop().run_until_complete(
+                    verifier._get_push_timestamp_events_api("alice", "repo", commit_sha)
+                )
+
+            assert ts is not None
+            from datetime import datetime, timezone
+            expected = datetime(2026, 2, 15, 14, 30, 0, tzinfo=timezone.utc).timestamp()
+            assert abs(ts - expected) < 1
+
+    def test_events_api_commit_not_found(self):
+        """Events API has no PushEvent with our commit → returns None."""
+        mock_events = [
+            {
+                "type": "PushEvent",
+                "created_at": "2026-02-15T14:30:00Z",
+                "payload": {
+                    "ref": "refs/heads/main",
+                    "head": "d" * 40,
+                    "before": "e" * 40,
+                },
+            },
+        ]
+
+        # Compare API says commit not in range
+        mock_compare = {"commits": [{"sha": "d" * 40}]}
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            verifier = GitHubVerifier(cache_dir=Path(tmpdir))
+
+            with patch("httpx.AsyncClient") as MockClient:
+                mock_events_resp = MagicMock()
+                mock_events_resp.status_code = 200
+
+                mock_compare_resp = MagicMock()
+                mock_compare_resp.status_code = 200
+                mock_compare_resp.json.return_value = mock_compare
+
+                # Page 1 returns events, page 2 returns empty
+                mock_events_resp.json.side_effect = [mock_events, []]
+
+                mock_client_instance = AsyncMock()
+                mock_client_instance.get.side_effect = [
+                    mock_events_resp,   # events page 1
+                    mock_compare_resp,  # compare for the push event
+                    mock_events_resp,   # events page 2 (empty)
+                ]
+                mock_client_instance.__aenter__ = AsyncMock(
+                    return_value=mock_client_instance
+                )
+                mock_client_instance.__aexit__ = AsyncMock(return_value=False)
+                MockClient.return_value = mock_client_instance
+
+                ts = asyncio.get_event_loop().run_until_complete(
+                    verifier._get_push_timestamp_events_api("alice", "repo", "a" * 40)
+                )
+
+            assert ts is None
+
+    def test_events_api_rate_limited(self):
+        """Events API returns 403 rate limit → returns None gracefully."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            verifier = GitHubVerifier(cache_dir=Path(tmpdir))
+
+            with patch("httpx.AsyncClient") as MockClient:
+                mock_resp = MagicMock()
+                mock_resp.status_code = 403
+
+                mock_client_instance = AsyncMock()
+                mock_client_instance.get.return_value = mock_resp
+                mock_client_instance.__aenter__ = AsyncMock(
+                    return_value=mock_client_instance
+                )
+                mock_client_instance.__aexit__ = AsyncMock(return_value=False)
+                MockClient.return_value = mock_client_instance
+
+                ts = asyncio.get_event_loop().run_until_complete(
+                    verifier._get_push_timestamp_events_api("alice", "repo", "a" * 40)
+                )
+
+            assert ts is None
+
+    # ---------------------------------------------------------------
+    # _get_push_timestamp_graphql (mocked)
+    # ---------------------------------------------------------------
+
+    def test_graphql_returns_pushed_date(self):
+        """GraphQL API returns valid pushedDate."""
+        graphql_response = {
+            "data": {
+                "repository": {
+                    "object": {
+                        "pushedDate": "2026-02-15T14:30:00Z",
+                        "committedDate": "2026-02-15T14:28:00Z",
+                    }
+                }
+            }
+        }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            verifier = GitHubVerifier(
+                cache_dir=Path(tmpdir), github_token="ghp_test"
+            )
+
+            with patch("httpx.AsyncClient") as MockClient:
+                mock_resp = MagicMock()
+                mock_resp.status_code = 200
+                mock_resp.json.return_value = graphql_response
+
+                mock_client_instance = AsyncMock()
+                mock_client_instance.post.return_value = mock_resp
+                mock_client_instance.__aenter__ = AsyncMock(
+                    return_value=mock_client_instance
+                )
+                mock_client_instance.__aexit__ = AsyncMock(return_value=False)
+                MockClient.return_value = mock_client_instance
+
+                ts = asyncio.get_event_loop().run_until_complete(
+                    verifier._get_push_timestamp_graphql("alice", "repo", "a" * 40)
+                )
+
+            assert ts is not None
+            from datetime import datetime, timezone
+            expected = datetime(2026, 2, 15, 14, 30, 0, tzinfo=timezone.utc).timestamp()
+            assert abs(ts - expected) < 1
+
+    def test_graphql_detects_backdating(self):
+        """GraphQL logs warning when pushedDate diverges from committedDate."""
+        # Committed date is backdated by 1 day
+        graphql_response = {
+            "data": {
+                "repository": {
+                    "object": {
+                        "pushedDate": "2026-02-15T14:30:00Z",
+                        "committedDate": "2026-02-14T10:00:00Z",
+                    }
+                }
+            }
+        }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            verifier = GitHubVerifier(
+                cache_dir=Path(tmpdir), github_token="ghp_test"
+            )
+
+            with patch("httpx.AsyncClient") as MockClient:
+                mock_resp = MagicMock()
+                mock_resp.status_code = 200
+                mock_resp.json.return_value = graphql_response
+
+                mock_client_instance = AsyncMock()
+                mock_client_instance.post.return_value = mock_resp
+                mock_client_instance.__aenter__ = AsyncMock(
+                    return_value=mock_client_instance
+                )
+                mock_client_instance.__aexit__ = AsyncMock(return_value=False)
+                MockClient.return_value = mock_client_instance
+
+                with patch("trajectoryrl.utils.github.logger") as mock_logger:
+                    ts = asyncio.get_event_loop().run_until_complete(
+                        verifier._get_push_timestamp_graphql("alice", "repo", "a" * 40)
+                    )
+
+                    # Should still return the push timestamp
+                    assert ts is not None
+                    # Should have logged a divergence warning
+                    warning_calls = [
+                        str(c) for c in mock_logger.warning.call_args_list
+                    ]
+                    assert any("divergence" in w.lower() for w in warning_calls)
+
+    def test_graphql_commit_not_found(self):
+        """GraphQL returns null object → None."""
+        graphql_response = {
+            "data": {"repository": {"object": None}}
+        }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            verifier = GitHubVerifier(
+                cache_dir=Path(tmpdir), github_token="ghp_test"
+            )
+
+            with patch("httpx.AsyncClient") as MockClient:
+                mock_resp = MagicMock()
+                mock_resp.status_code = 200
+                mock_resp.json.return_value = graphql_response
+
+                mock_client_instance = AsyncMock()
+                mock_client_instance.post.return_value = mock_resp
+                mock_client_instance.__aenter__ = AsyncMock(
+                    return_value=mock_client_instance
+                )
+                mock_client_instance.__aexit__ = AsyncMock(return_value=False)
+                MockClient.return_value = mock_client_instance
+
+                ts = asyncio.get_event_loop().run_until_complete(
+                    verifier._get_push_timestamp_graphql("alice", "repo", "a" * 40)
+                )
+
+            assert ts is None
+
+    # ---------------------------------------------------------------
+    # _get_server_push_timestamp (orchestration)
+    # ---------------------------------------------------------------
+
+    def test_server_push_timestamp_events_api_succeeds(self):
+        """Events API succeeds → returns timestamp without trying GraphQL."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            verifier = GitHubVerifier(
+                cache_dir=Path(tmpdir), github_token="ghp_test"
+            )
+
+            with patch.object(
+                verifier, "_get_push_timestamp_events_api",
+                new_callable=AsyncMock, return_value=1700000000.0,
+            ) as mock_events, patch.object(
+                verifier, "_get_push_timestamp_graphql",
+                new_callable=AsyncMock,
+            ) as mock_graphql:
+                ts = asyncio.get_event_loop().run_until_complete(
+                    verifier._get_server_push_timestamp(
+                        "https://github.com/alice/repo", "a" * 40
+                    )
+                )
+
+            assert ts == 1700000000.0
+            mock_events.assert_called_once()
+            mock_graphql.assert_not_called()  # Should not fall through
+
+    def test_server_push_timestamp_falls_through_to_graphql(self):
+        """Events API returns None → falls through to GraphQL."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            verifier = GitHubVerifier(
+                cache_dir=Path(tmpdir), github_token="ghp_test"
+            )
+
+            with patch.object(
+                verifier, "_get_push_timestamp_events_api",
+                new_callable=AsyncMock, return_value=None,
+            ), patch.object(
+                verifier, "_get_push_timestamp_graphql",
+                new_callable=AsyncMock, return_value=1700000000.0,
+            ) as mock_graphql:
+                ts = asyncio.get_event_loop().run_until_complete(
+                    verifier._get_server_push_timestamp(
+                        "https://github.com/alice/repo", "a" * 40
+                    )
+                )
+
+            assert ts == 1700000000.0
+            mock_graphql.assert_called_once()
+
+    def test_server_push_timestamp_both_fail_returns_none(self):
+        """Both APIs fail → returns None (fail-safe rejection)."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            verifier = GitHubVerifier(
+                cache_dir=Path(tmpdir), github_token="ghp_test"
+            )
+
+            with patch.object(
+                verifier, "_get_push_timestamp_events_api",
+                new_callable=AsyncMock, return_value=None,
+            ), patch.object(
+                verifier, "_get_push_timestamp_graphql",
+                new_callable=AsyncMock, return_value=None,
+            ):
+                ts = asyncio.get_event_loop().run_until_complete(
+                    verifier._get_server_push_timestamp(
+                        "https://github.com/alice/repo", "a" * 40
+                    )
+                )
+
+            assert ts is None
+
+    def test_server_push_timestamp_no_token_skips_graphql(self):
+        """No github_token → skips GraphQL entirely."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            verifier = GitHubVerifier(
+                cache_dir=Path(tmpdir), github_token=None
+            )
+
+            with patch.object(
+                verifier, "_get_push_timestamp_events_api",
+                new_callable=AsyncMock, return_value=None,
+            ), patch.object(
+                verifier, "_get_push_timestamp_graphql",
+                new_callable=AsyncMock,
+            ) as mock_graphql:
+                ts = asyncio.get_event_loop().run_until_complete(
+                    verifier._get_server_push_timestamp(
+                        "https://github.com/alice/repo", "a" * 40
+                    )
+                )
+
+            assert ts is None
+            mock_graphql.assert_not_called()
 
 
 # ===================================================================

@@ -77,6 +77,9 @@ class ValidatorConfig:
     rho_reliability: float = 0.1  # 10% weight on variance
     delta_threshold: float = 0.05  # 5% first-mover advantage threshold
 
+    # GitHub verification
+    github_token: Optional[str] = None  # GITHUB_TOKEN env var; needed for push timestamp
+
     # Pack caching
     pack_cache_dir: Path = field(
         default_factory=lambda: Path("/tmp/trajectoryrl_packs")
@@ -153,5 +156,6 @@ class ValidatorConfig:
                 )
             ),
             epoch_interval=int(os.getenv("EPOCH_INTERVAL", "720")),
+            github_token=os.getenv("GITHUB_TOKEN"),
             log_level=os.getenv("LOG_LEVEL", "INFO"),
         )
