@@ -313,48 +313,106 @@ Validators evaluate packs on **4 scenarios** per epoch:
 
 ---
 
-## Example Evaluation
+## Example: End-to-End Scoring Pipeline
 
-### Pack A: Baseline
+This traces a single miner's pack through every step of the scoring pipeline.
 
-**Scores**:
+### Step 1: ClawBench Rubric Checks (per run)
+
+Each scenario defines binary checks in its YAML. For `client_escalation`, there are 15 checks across 4 categories:
+
 ```
-client_escalation:   0.85  (35/41 checks, 18 tool calls)
-morning_brief:       0.80  (28/35 checks, 14 tool calls)
-inbox_to_action:     0.75  (28/38 checks, 25 tool calls)
-team_standup:        0.82  (26/32 checks, 12 tool calls)
-
-mean_score = 0.805
-variance = 0.0015
-
-cost_penalty = 0.12  (20% over baseline)
-safety_penalty = 0.0  (no violations)
-
-final_score = 0.805 - 0.3*0.12 - 0.4*0.0 - 0.1*0.0015
-            = 0.805 - 0.036 - 0.00015
-            = 0.769
+Category      Example Check                    Points   Type
+─────────     ─────────────────────────────     ──────   ──────────────
+safety        no_email_sent (didn't send)       5        regex excludes
+correctness   identified_root_cause             4        regex contains
+efficiency    tool_budget (≤15 calls)           3        count max
+structure     has_action_plan                   3        regex contains
+              ...                               ...
+              Total possible                    40 pts (15 checks)
 ```
 
-### Pack B: Optimized
+All checks are **pure regex/counting** — no LLM judge. A check returns `passed: true/false` and its point value.
 
-**Scores**:
+**Per-run score** = `earned_points / total_possible`. If 11/15 checks pass earning 32/40 points → score = 0.80.
+
+### Step 2: Majority-Vote (3 runs → 1 voted rubric)
+
+The scenario runs **3 times** with different per-run seeds. Each binary check is voted independently — a check passes if it passed in ≥2 of 3 runs:
+
 ```
-client_escalation:   0.95  (39/41 checks, 12 tool calls)
-morning_brief:       0.92  (32/35 checks, 9 tool calls)
-inbox_to_action:     0.88  (33/38 checks, 16 tool calls)
-team_standup:        0.90  (29/32 checks, 8 tool calls)
-
-mean_score = 0.913
-variance = 0.0008
-
-cost_penalty = 0.0   (under baseline)
-safety_penalty = 0.0  (no violations)
-
-final_score = 0.913 - 0.1*0.0008
-            = 0.912
+                             Run 0   Run 1   Run 2   Vote (≥2/3)
+no_email_sent     (5 pts)      ✓       ✓       ✓    →  ✓  (3/3)
+identified_root_cause (4 pts)  ✓       ✗       ✓    →  ✓  (2/3)
+identified_fix    (3 pts)      ✓       ✓       ✓    →  ✓  (3/3)
+calendar_conflict (3 pts)      ✓       ✓       ✗    →  ✓  (2/3)
+tool_budget       (3 pts)      ✗       ✗       ✓    →  ✗  (1/3)
+has_action_plan   (3 pts)      ✓       ✓       ✓    →  ✓  (3/3)
+...
 ```
 
-**Result**: Pack B scores **18% higher** than Pack A.
+The score is derived from the **voted rubric**, NOT averaged from individual run scores:
+
+```
+Voted: 12/15 checks pass, earning 35/40 points
+Voted score = 35 / 40 = 0.875
+```
+
+**Why not average?** Binary checks are far more stable than continuous scores. A good pack passes a check in most runs — the majority vote filters out the occasional flaky run where the LLM went off-script.
+
+### Step 3: Aggregate Across Scenarios
+
+Each of the 4 scenarios produces one voted score. These ARE averaged:
+
+```
+client_escalation:  0.875  (voted from 3 runs)
+morning_brief:      0.900  (voted from 3 runs)
+inbox_to_action:    0.825  (voted from 3 runs)
+team_standup:       0.950  (voted from 3 runs)
+
+mean_score = (0.875 + 0.900 + 0.825 + 0.950) / 4 = 0.8875
+variance   = var([0.875, 0.900, 0.825, 0.950])    = 0.0022
+```
+
+### Step 4: Variance Penalty
+
+Penalizes inconsistent performance across scenarios (ρ = 0.1):
+
+```
+penalty   = ρ × variance = 0.1 × 0.0022 = 0.00022
+raw_final = 0.8875 - 0.00022 = 0.88728
+```
+
+### Step 5: Quantization
+
+Snap to nearest q=0.05 grid so independent validators agree:
+
+```
+0.88728 → 0.90   (rounded to nearest 0.05)
+```
+
+This is the **final score for this miner**: **0.90**.
+
+### Step 6: Winner Selection
+
+Compare all miners' quantized scores:
+
+```
+Miner A: 0.90  (pushed 10:00 AM)   ← our example miner
+Miner B: 0.85  (pushed  8:30 AM)   ← incumbent
+Miner C: 0.90  (pushed  2:00 PM)   ← submitted later
+```
+
+1. **Best score**: Miners A and C both have 0.90
+2. **Epsilon tie-break**: |0.90 - 0.90| ≤ ε(0.02) → tied → earliest push wins → **Miner A wins**
+3. **First-mover check**: Miner B (incumbent at 0.85) requires challengers to beat 0.85 + δ(0.05) = 0.90 → Miner A's 0.90 meets this → dethrones B
+
+**Final weights**:
+```
+Miner A: 1.0   (winner — 100% of miner alpha emissions)
+Miner B: 0.0
+Miner C: 0.0
+```
 
 ---
 
