@@ -284,7 +284,9 @@ class TestTrajectoryScorer:
 
     def test_select_winner_basic(self, scorer):
         scores = {0: 0.85, 1: 0.72, 2: 0.91}
-        weights = scorer.select_winner(scores, first_mover_data={}, delta=0.05)
+        weights = scorer.select_winner(
+            scores, first_mover_data={}, delta=0.05, num_active_miners=20
+        )
 
         assert weights[2] == 1.0  # uid 2 has highest score
         assert weights[0] == 0.0
@@ -295,7 +297,9 @@ class TestTrajectoryScorer:
 
     def test_select_winner_single_miner(self, scorer):
         scores = {42: 0.8}
-        weights = scorer.select_winner(scores, first_mover_data={}, delta=0.05)
+        weights = scorer.select_winner(
+            scores, first_mover_data={}, delta=0.05, num_active_miners=20
+        )
         assert weights[42] == 1.0
 
     def test_select_winner_first_mover_protection(self, scorer):
@@ -306,7 +310,9 @@ class TestTrajectoryScorer:
             0: (0.85, 100.0),  # A submitted first
             1: (0.88, 200.0),  # B submitted later
         }
-        weights = scorer.select_winner(scores, first_mover_data, delta=0.05)
+        weights = scorer.select_winner(
+            scores, first_mover_data, delta=0.05, num_active_miners=20
+        )
 
         # A should win due to first-mover protection
         assert weights[0] == 1.0
@@ -319,7 +325,9 @@ class TestTrajectoryScorer:
             0: (0.85, 100.0),
             1: (0.91, 200.0),
         }
-        weights = scorer.select_winner(scores, first_mover_data, delta=0.05)
+        weights = scorer.select_winner(
+            scores, first_mover_data, delta=0.05, num_active_miners=20
+        )
 
         # B wins because 0.91 > 0.90
         assert weights[1] == 1.0
@@ -374,14 +382,18 @@ class TestTrajectoryScorer:
         # Two miners with nearly identical scores (within ε)
         scores = {0: 0.90, 1: 0.91}
         # No first-mover data → pure epsilon tie-break
-        weights = s.select_winner(scores, first_mover_data={}, delta=0.05)
+        weights = s.select_winner(
+            scores, first_mover_data={}, delta=0.05, num_active_miners=20
+        )
         # Without first_mover_data, no timestamps to break tie → highest score wins
         assert weights[1] == 1.0
 
         # Now with timestamps: miner 0 submitted first
         first_mover = {0: (0.90, 100.0), 1: (0.91, 200.0)}
         # Use delta=0 to isolate epsilon behavior from first-mover protection
-        weights = s.select_winner(scores, first_mover, delta=0.0)
+        weights = s.select_winner(
+            scores, first_mover, delta=0.0, num_active_miners=20
+        )
         # |0.91 - 0.90| = 0.01 ≤ ε=0.02 → tied → earliest (miner 0) wins
         assert weights[0] == 1.0
         assert weights[1] == 0.0
@@ -393,12 +405,50 @@ class TestTrajectoryScorer:
         )
         scores = {0: 0.85, 1: 0.91}
         first_mover = {0: (0.85, 100.0), 1: (0.91, 200.0)}
-        weights = s.select_winner(scores, first_mover, delta=0.05)
+        weights = s.select_winner(
+            scores, first_mover, delta=0.05, num_active_miners=20
+        )
 
         # |0.91 - 0.85| = 0.06 > ε=0.02 → not tied, miner 1 wins on score
         # Also 0.91 > 0.85 + 0.05 = 0.90 → beats delta threshold
         assert weights[1] == 1.0
         assert weights[0] == 0.0
+
+    def test_select_winner_bootstrap_graduated(self):
+        """With few miners, use graduated 70/20/10 curve instead of WTA."""
+        s = TrajectoryScorer(bootstrap_threshold=10)
+        scores = {0: 0.80, 1: 0.91, 2: 0.85}
+        first_mover = {0: (0.80, 100.0), 1: (0.91, 200.0), 2: (0.85, 300.0)}
+        # 3 miners < threshold 10 → bootstrap mode
+        weights = s.select_winner(
+            scores, first_mover, delta=0.05, num_active_miners=3
+        )
+        assert weights[1] == 0.70  # 1st (highest score)
+        assert weights[2] == 0.20  # 2nd
+        assert weights[0] == 0.10  # 3rd
+
+    def test_select_winner_bootstrap_tie_break(self):
+        """Bootstrap ties broken by earliest push timestamp."""
+        s = TrajectoryScorer(bootstrap_threshold=10)
+        scores = {0: 0.90, 1: 0.90}  # same score
+        first_mover = {0: (0.90, 200.0), 1: (0.90, 100.0)}  # miner 1 pushed first
+        weights = s.select_winner(
+            scores, first_mover, delta=0.05, num_active_miners=2
+        )
+        assert weights[1] == 0.70  # miner 1 first (earlier timestamp)
+        assert weights[0] == 0.20
+
+    def test_select_winner_above_threshold_is_wta(self):
+        """Once miner count >= threshold, pure winner-take-all resumes."""
+        s = TrajectoryScorer(bootstrap_threshold=3)
+        scores = {0: 0.80, 1: 0.91, 2: 0.85}
+        weights = s.select_winner(
+            scores, first_mover_data={}, delta=0.05, num_active_miners=3
+        )
+        # 3 >= threshold 3 → WTA
+        assert weights[1] == 1.0
+        assert weights[0] == 0.0
+        assert weights[2] == 0.0
 
 
 # ===================================================================
@@ -1488,9 +1538,11 @@ class TestScoringIntegration:
         agg = scorer.aggregate_scores(results)
         final = scorer.compute_final_score(agg)
 
-        # Two miners compete
+        # Two miners compete (num_active_miners above threshold for WTA)
         miner_scores = {0: final, 1: final * 0.8}
-        weights = scorer.select_winner(miner_scores, first_mover_data={}, delta=0.05)
+        weights = scorer.select_winner(
+            miner_scores, first_mover_data={}, delta=0.05, num_active_miners=20
+        )
 
         assert weights[0] == 1.0  # Higher score wins
         assert weights[1] == 0.0

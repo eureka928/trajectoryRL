@@ -1,9 +1,10 @@
 """Scoring functions for policy pack evaluation."""
 
 import logging
+import math
 import numpy as np
-from typing import Dict, List, Tuple
-from dataclasses import dataclass
+from typing import Dict, List, Optional, Tuple
+from dataclasses import dataclass, field
 
 from ..utils.clawbench import EvaluationResult
 
@@ -15,17 +16,19 @@ class AggregatedScore:
     """Aggregated score across multiple evaluations.
 
     Attributes:
-        mean_score: Average score across scenarios/seeds
-        variance: Variance in scores (for reliability penalty)
+        mean_score: Weighted average score across scenarios
+        variance: Weighted variance in scores (for reliability penalty)
         success_rate: Fraction of successful evaluations
         total_evaluations: Number of evaluations run
         scenario_scores: Dict of scenario_name -> score
+        scenario_weights: Dict of scenario_name -> weight (used in mean)
     """
     mean_score: float
     variance: float
     success_rate: float
     total_evaluations: int
     scenario_scores: Dict[str, float]
+    scenario_weights: Dict[str, float] = field(default_factory=dict)
 
     @property
     def final_score(self) -> float:
@@ -47,6 +50,7 @@ class TrajectoryScorer:
         rho_reliability: float = 0.1,
         score_quantization: float = 0.05,
         consensus_epsilon: float = 0.02,
+        bootstrap_threshold: int = 10,
     ):
         """Initialize scorer.
 
@@ -59,29 +63,40 @@ class TrajectoryScorer:
                 disagreement caused by LLM non-determinism.
             consensus_epsilon: Scores within ε of each other are treated as
                 tied. Ties go to the first-mover.
+            bootstrap_threshold: When active miners < this, use graduated
+                reward curve instead of winner-take-all.
         """
         self.lambda_cost = lambda_cost
         self.mu_safety = mu_safety
         self.rho_reliability = rho_reliability
         self.score_quantization = score_quantization
         self.consensus_epsilon = consensus_epsilon
+        self.bootstrap_threshold = bootstrap_threshold
 
         logger.info(
             f"Scorer initialized: λ={lambda_cost}, μ={mu_safety}, "
-            f"ρ={rho_reliability}, q={score_quantization}, ε={consensus_epsilon}"
+            f"ρ={rho_reliability}, q={score_quantization}, ε={consensus_epsilon}, "
+            f"bootstrap_threshold={bootstrap_threshold}"
         )
 
     def aggregate_scores(
         self,
-        results: List[EvaluationResult]
+        results: List[EvaluationResult],
+        scenario_weights: Optional[Dict[str, float]] = None,
     ) -> AggregatedScore:
-        """Aggregate multiple evaluation results.
+        """Aggregate multiple evaluation results with optional scenario weights.
+
+        When ``scenario_weights`` is provided, the mean score and variance are
+        computed as a weighted average/variance across scenarios.  Weights are
+        read from the ``weight`` field in each scenario YAML (default 1.0).
 
         Args:
             results: List of EvaluationResult from multiple scenarios/seeds
+            scenario_weights: Optional dict of scenario_name -> weight.
+                If None, all scenarios are weighted equally.
 
         Returns:
-            AggregatedScore with mean, variance, success rate
+            AggregatedScore with weighted mean, variance, success rate
         """
         if not results:
             return AggregatedScore(
@@ -89,42 +104,67 @@ class TrajectoryScorer:
                 variance=0.0,
                 success_rate=0.0,
                 total_evaluations=0,
-                scenario_scores={}
+                scenario_scores={},
+                scenario_weights={},
             )
 
-        # Extract scores
-        scores = [r.score for r in results]
         successes = [r.success for r in results]
-
-        # Compute statistics
-        mean_score = float(np.mean(scores))
-        variance = float(np.var(scores)) if len(scores) > 1 else 0.0
         success_rate = float(np.mean(successes))
 
         # Group by scenario
-        scenario_scores = {}
+        scenario_groups: Dict[str, List[float]] = {}
         for result in results:
-            if result.scenario_name not in scenario_scores:
-                scenario_scores[result.scenario_name] = []
-            scenario_scores[result.scenario_name].append(result.score)
+            if result.scenario_name not in scenario_groups:
+                scenario_groups[result.scenario_name] = []
+            scenario_groups[result.scenario_name].append(result.score)
 
         # Average within scenarios
         scenario_scores = {
             name: float(np.mean(scores))
-            for name, scores in scenario_scores.items()
+            for name, scores in scenario_groups.items()
         }
+
+        # Resolve weights (default 1.0 for missing entries)
+        weights = {}
+        for name in scenario_scores:
+            weights[name] = (
+                scenario_weights.get(name, 1.0)
+                if scenario_weights
+                else 1.0
+            )
+
+        # Weighted mean across scenarios
+        total_weight = sum(weights.values())
+        if total_weight > 0:
+            mean_score = sum(
+                scenario_scores[n] * weights[n] for n in scenario_scores
+            ) / total_weight
+        else:
+            mean_score = 0.0
+
+        # Weighted variance
+        if len(scenario_scores) > 1 and total_weight > 0:
+            variance = sum(
+                weights[n] * (scenario_scores[n] - mean_score) ** 2
+                for n in scenario_scores
+            ) / total_weight
+        else:
+            variance = 0.0
 
         logger.info(
             f"Aggregated {len(results)} results: "
             f"mean={mean_score:.3f}, var={variance:.3f}, success={success_rate:.1%}"
         )
+        if scenario_weights:
+            logger.debug(f"Scenario weights: {weights}")
 
         return AggregatedScore(
             mean_score=mean_score,
             variance=variance,
             success_rate=success_rate,
             total_evaluations=len(results),
-            scenario_scores=scenario_scores
+            scenario_scores=scenario_scores,
+            scenario_weights=weights,
         )
 
     def compute_final_score(
@@ -181,8 +221,14 @@ class TrajectoryScorer:
         scores: Dict[int, float],
         first_mover_data: Dict[int, Tuple[float, float]],
         delta: float = 0.05,
+        num_active_miners: Optional[int] = None,
     ) -> Dict[int, float]:
         """Select winner using winner-take-all with first-mover advantage.
+
+        When the subnet has fewer active miners than ``bootstrap_threshold``,
+        rewards are distributed using a graduated curve (top-3 get 70/20/10)
+        to encourage early adoption.  Once the miner count reaches the
+        threshold, pure winner-take-all resumes.
 
         Consensus-safe: miners whose quantized scores differ by less than
         ``consensus_epsilon`` are treated as tied. Ties are broken in favour
@@ -196,12 +242,22 @@ class TrajectoryScorer:
             scores: Dict of miner_uid -> quantized score [0, 1]
             first_mover_data: Dict of miner_uid -> (score, timestamp)
             delta: First-mover threshold (new score must beat best + delta)
+            num_active_miners: Total active miners in metagraph.
+                If None, defaults to len(scores).
 
         Returns:
-            Dict of miner_uid -> weight (winner=1.0, others=0.0)
+            Dict of miner_uid -> weight (sums to 1.0)
         """
         if not scores:
             return {}
+
+        n_miners = num_active_miners if num_active_miners is not None else len(scores)
+
+        # --- Bootstrap phase: graduated rewards ---
+        if n_miners < self.bootstrap_threshold:
+            return self._bootstrap_weights(scores, first_mover_data)
+
+        # --- Steady-state: winner-take-all ---
 
         # Find current best score
         best_uid = max(scores.keys(), key=lambda uid: scores[uid])
@@ -260,6 +316,44 @@ class TrajectoryScorer:
         logger.info(
             f"Winner-take-all: Miner {best_uid} wins with score {best_score:.3f} "
             f"(delta={delta}, ε={eps})"
+        )
+
+        return weights
+
+    def _bootstrap_weights(
+        self,
+        scores: Dict[int, float],
+        first_mover_data: Dict[int, Tuple[float, float]],
+    ) -> Dict[int, float]:
+        """Graduated reward curve for the bootstrap phase.
+
+        Top-3 miners receive 70% / 20% / 10% of rewards. Ties are broken
+        by earliest push timestamp (same rule as steady-state).
+
+        Args:
+            scores: Dict of miner_uid -> quantized score
+            first_mover_data: Dict of miner_uid -> (score, timestamp)
+
+        Returns:
+            Dict of miner_uid -> weight (sums to 1.0)
+        """
+        BOOTSTRAP_SHARES = [0.70, 0.20, 0.10]
+
+        # Sort by score desc, breaking ties by earliest push timestamp
+        def sort_key(uid: int) -> Tuple[float, float]:
+            ts = first_mover_data[uid][1] if uid in first_mover_data else float("inf")
+            return (-scores[uid], ts)
+
+        ranked = sorted(scores.keys(), key=sort_key)
+
+        weights = {uid: 0.0 for uid in scores.keys()}
+        for i, uid in enumerate(ranked):
+            if i < len(BOOTSTRAP_SHARES):
+                weights[uid] = BOOTSTRAP_SHARES[i]
+
+        logger.info(
+            f"Bootstrap phase ({len(scores)} miners < {self.bootstrap_threshold}): "
+            f"graduated rewards {dict((uid, w) for uid, w in weights.items() if w > 0)}"
         )
 
         return weights

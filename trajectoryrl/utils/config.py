@@ -82,6 +82,9 @@ class ValidatorConfig:
     score_quantization: float = 0.05  # Round scores to nearest 0.05
     consensus_epsilon: float = 0.02  # Scores within ε are tied; tie → first-mover wins
 
+    # Bootstrap config (graduated rewards until enough miners join)
+    bootstrap_threshold: int = 10  # When active miners < this, use top-3 curve (70/20/10)
+
     # GitHub verification
     github_token: Optional[str] = None  # GITHUB_TOKEN env var; needed for push timestamp
 

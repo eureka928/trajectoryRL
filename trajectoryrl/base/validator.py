@@ -84,6 +84,7 @@ class TrajectoryValidator:
             rho_reliability=config.rho_reliability,
             score_quantization=config.score_quantization,
             consensus_epsilon=config.consensus_epsilon,
+            bootstrap_threshold=config.bootstrap_threshold,
         )
 
         # Initialize GitHub verifier
@@ -308,9 +309,9 @@ class TrajectoryValidator:
             )
             scores[miner_uid] = score
 
-        # 4. Set weights
+        # 4. Set weights (pass miner count for bootstrap detection)
         if scores:
-            await self._set_weights(scores)
+            await self._set_weights(scores, num_active_miners=len(miners))
         else:
             logger.warning("No scores to set!")
 
@@ -430,12 +431,16 @@ class TrajectoryValidator:
                     exc_info=True
                 )
 
-        # Step 5: Aggregate scores
+        # Step 5: Aggregate scores (weighted by scenario YAML weight field)
         if not results:
             logger.warning(f"Miner {miner_uid}: No results!")
             return 0.0
 
-        aggregated = self.scorer.aggregate_scores(results)
+        scenario_weights = {
+            name: cfg.get("weight", 1.0)
+            for name, cfg in self.scenarios.items()
+        }
+        aggregated = self.scorer.aggregate_scores(results, scenario_weights)
         final_score = self.scorer.compute_final_score(aggregated)
 
         logger.info(
@@ -496,19 +501,28 @@ class TrajectoryValidator:
             logger.warning(f"Failed to fetch pack from miner {miner_uid}: {e}")
             return None
 
-    async def _set_weights(self, scores: Dict[int, float]):
-        """Set on-chain weights based on scores using winner-take-all.
+    async def _set_weights(
+        self,
+        scores: Dict[int, float],
+        num_active_miners: Optional[int] = None,
+    ):
+        """Set on-chain weights based on scores.
+
+        Uses winner-take-all in steady state, or graduated top-3 curve
+        during the bootstrap phase (when active miners < bootstrap_threshold).
 
         Args:
             scores: Dict of miner_uid -> score [0, 1]
+            num_active_miners: Total active miners (for bootstrap detection)
         """
         logger.info(f"Setting weights for {len(scores)} miners...")
 
-        # Select winner with first-mover advantage (constant δ)
+        # Select winner (or bootstrap curve) with first-mover advantage
         weights_dict = self.scorer.select_winner(
             scores=scores,
             first_mover_data=self.first_mover_data,
             delta=self.config.delta_threshold,
+            num_active_miners=num_active_miners,
         )
 
         # Prepare for Bittensor API
