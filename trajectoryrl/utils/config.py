@@ -54,7 +54,7 @@ class ValidatorConfig:
     clawbench_path: Path = field(
         default_factory=lambda: Path(__file__).parent.parent.parent.parent / "clawbench"
     )
-    clawbench_commit: str = "b718230cb201fc0a4c28d12e011b1663db07d8f7"  # v0.3.0
+    clawbench_commit: str = "e50824df75e10989c0adaf398b6897b5284701d5"
     scenarios: List[str] = field(
         default_factory=lambda: [
             "client_escalation",
@@ -135,7 +135,7 @@ class ValidatorConfig:
             if actual_commit != self.clawbench_commit:
                 raise ValueError(
                     f"ClawBench version mismatch!\n"
-                    f"Expected: {self.clawbench_commit} (v0.3.0)\n"
+                    f"Expected: {self.clawbench_commit}\n"
                     f"Actual:   {actual_commit}\n"
                     f"Run: cd {self.clawbench_path} && git checkout {self.clawbench_commit}"
                 )
