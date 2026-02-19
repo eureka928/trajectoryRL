@@ -61,12 +61,13 @@ class ValidatorConfig:
             "morning_brief",
             "inbox_to_action",
             "team_standup",
+            "inbox_triage",
         ]
     )
     scenarios_path: Optional[Path] = None
 
     # Evaluation config
-    tasks_per_epoch: int = 4  # Run all 4 scenarios
+    tasks_per_epoch: int = 4  # Select 4 scenarios from pool per epoch
     seeds_per_task: int = 3  # Runs per scenario for majority-vote consensus
     epoch_interval: int = 14400  # 4 hours (14400 seconds)
     timeout_per_scenario: int = 120  # 2 minutes max per scenario
