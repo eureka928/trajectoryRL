@@ -30,15 +30,6 @@ class AggregatedScore:
     scenario_scores: Dict[str, float]
     scenario_weights: Dict[str, float] = field(default_factory=dict)
 
-    @property
-    def final_score(self) -> float:
-        """Compute final score with reliability penalty.
-
-        Returns:
-            Final score in [0, 1]
-        """
-        return max(0.0, min(1.0, self.mean_score))
-
 
 class TrajectoryScorer:
     """Scores policy packs based on ClawBench scenario results."""
