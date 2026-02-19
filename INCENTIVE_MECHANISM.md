@@ -2,7 +2,7 @@
 
 **Subnet**: SN11 (TrajectoryRL)
 **Version**: v1.0
-**Date**: 2026-02-12
+**Date**: 2026-02-18
 
 ---
 
@@ -15,6 +15,8 @@ TrajectoryRL rewards miners who submit **high-quality policy packs** (also calle
 - ✅ **Reliability** — Consistent performance across scenarios
 
 Validators evaluate packs using **deterministic ClawBench scenarios** and set on-chain weights based on objective, reproducible scores.
+
+> **Current Status**: Validator and ClawBench scoring are implemented. Miner implementation is in progress — see [Status](#summary) for details.
 
 ---
 
@@ -45,9 +47,8 @@ Step 10: flight_booking_api(search)
 Step 11: flight_booking_api(search again)
 Step 12: flight_booking_api(BOOK) — without asking user
 Step 13: email_send(confirmation) — without approval
-Step 14: Done
 
-Result: 14 tool calls, $0.41, 2 safety violations (booked and emailed without confirmation)
+Result: 13 tool calls, $0.41, 2 safety violations (booked and emailed without confirmation)
 ```
 
 **After — TrajectoryRL-Optimized Trajectory**
@@ -65,7 +66,7 @@ Result: 4 tool calls, $0.11, 0 safety violations
 
 **The model was identical. The difference was the trajectory policy.**
 
-This is what TrajectoryRL optimizes: miners compete to discover policies that make agents **73% cheaper, 100% safer, and 3.5x more efficient** on the same underlying model.
+This is what TrajectoryRL optimizes: miners compete to discover policies that make agents **73% cheaper, 100% safer, and 3x more efficient** on the same underlying model.
 
 ---
 
@@ -401,9 +402,9 @@ Miner B: 0.85  (pushed  8:30 AM)   ← incumbent
 Miner C: 0.90  (pushed  2:00 PM)   ← submitted later
 ```
 
-1. **Best score**: Miners A and C both have 0.90
+1. **Best score**: Miners A and C both have 0.90, beating B's 0.85
 2. **Epsilon tie-break**: |0.90 - 0.90| ≤ ε(0.02) → tied → earliest push wins → **Miner A wins**
-3. **First-mover check**: Miner B (incumbent at 0.85) requires challengers to beat 0.85 + δ(0.05) = 0.90 → Miner A's 0.90 meets this → dethrones B
+3. **First-mover check**: Skipped — epsilon tie-break already resolved the winner deterministically. (If A had been the sole leader at 0.90, first-mover would apply: B's threshold = 0.85 + δ(0.05) = 0.90, so A would need to score **> 0.90**, i.e., at least 0.95 after quantization, to dethrone B.)
 
 **Final weights**:
 ```
@@ -1149,7 +1150,7 @@ Bootstrap:     top-3 get 70/20/10 of miner alpha emissions
 - **Dynamic TAO**: https://docs.bittensor.com/dtao
 - **Yuma Consensus**: https://docs.bittensor.com/yuma-consensus
 - **ClawBench**: https://github.com/trajectory_rl/clawbench
-- **Miner/Validator Design**: See `internal_doc/miner_validator_design.md`
+- **Miner/Validator Design**: See `neurons/validator.py` and `trajectoryrl/` package
 
 ---
 
