@@ -499,6 +499,7 @@ Validators verify:
 3. **Server-side push timestamp** (via GitHub API) is before submission time (uses on-chain block timestamp from Substrate Timestamp pallet for deterministic, cross-validator agreement)
 4. Pack content matches `pack_hash`
 5. PolicyBundle passes schema validation
+6. **NCD similarity** vs. current winner < `similarity_threshold` (0.80) — see [Pack Similarity Detection](#9-pack-similarity-detection-ncd)
 
 **Why Public GitHub + Server-Side Timestamps?**
 - GitHub API push timestamps are server-controlled and cannot be forged
@@ -967,6 +968,93 @@ Beyond identity variation, the epoch seed also controls:
 - Confirmation bypass
 - Confidential data leakage
 
+### 9. Pack Similarity Detection (NCD)
+
+**Enforcement**: Validators compare each new submission against the current winner's pack using **Normalized Compression Distance (NCD)** — an information-theoretic similarity measure. Packs exceeding the similarity threshold are rejected with score = 0.
+
+**Prevents**:
+- Copy-paste with minor edits (add whitespace, reword a sentence)
+- Synonym substitution attacks
+- Paragraph reordering to evade naive diff checks
+- "Wrapper" packs that embed the winner's policy inside boilerplate
+
+**Why NCD?** The δ threshold (measure #2) stops copycats who score *the same*. But a cheater who copies the winner's AGENTS.md, tweaks a few lines, and gets lucky with LLM variance could cross the δ bar. NCD catches the copy *before* evaluation, regardless of score.
+
+**How it works**:
+
+NCD measures how much "new information" one text contains relative to another, using compression as a proxy for information content:
+
+```
+NCD(x, y) = (C(x+y) - min(C(x), C(y))) / max(C(x), C(y))
+
+Where C(·) = len(zlib.compress(·, level=9))
+```
+
+If two texts are nearly identical, compressing them *together* barely increases the size vs. compressing each alone — because the compressor finds the repeated patterns. The ratio tells you how much genuinely new content the challenger added.
+
+**Implementation**:
+
+```python
+import re, zlib
+
+def normalize_policy(text: str) -> str:
+    """Strip formatting noise before comparison."""
+    text = text.lower()
+    text = re.sub(r'#+ *', '', text)          # strip markdown headings
+    text = re.sub(r'\s+', ' ', text).strip()   # collapse whitespace
+    return text
+
+def pack_similarity(pack_a: dict, pack_b: dict) -> float:
+    """Returns similarity score in [0, 1]. 1.0 = identical."""
+    a = normalize_policy(pack_a["files"]["AGENTS.md"])
+    b = normalize_policy(pack_b["files"]["AGENTS.md"])
+
+    a_bytes = a.encode("utf-8")
+    b_bytes = b.encode("utf-8")
+    ca  = len(zlib.compress(a_bytes, 9))
+    cb  = len(zlib.compress(b_bytes, 9))
+    cab = len(zlib.compress(a_bytes + b_bytes, 9))
+
+    ncd = (cab - min(ca, cb)) / max(ca, cb)
+    return 1.0 - ncd   # flip: 0 = unrelated, 1 = identical
+
+SIMILARITY_THRESHOLD = 0.80   # reject if ≥ 80% similar
+```
+
+**Validation pipeline position** (runs *before* expensive ClawBench evaluation):
+
+```
+Miner submits pack
+  → Schema validation (OPP v1)
+  → NCD similarity check vs. current winner   ← if similarity ≥ 0.80: score = 0
+  → ClawBench evaluation (only if similarity < 0.80)
+  → Scoring / winner selection
+```
+
+**Why NCD is hard to game**:
+
+| Evasion Attempt | Why It Fails |
+|-----------------|--------------|
+| Add whitespace / newlines | `normalize_policy` collapses all whitespace; compressor ignores repetitive bytes |
+| Reorder paragraphs | zlib uses a 32KB sliding window — reordered blocks still match within the window |
+| Substitute synonyms | Only works if you change *enough* words that the policy is genuinely different — at which point δ becomes the real barrier |
+| Insert junk comments | Junk compresses independently of the original; the shared content still compresses together. Also wastes the 32KB pack size budget |
+| Pad with random text | Random data doesn't compress well, inflating `C(challenger)` and `C(concat)` proportionally — NCD stays high |
+| Wrap winner's policy in boilerplate | The core policy still compresses against the original; boilerplate adds marginal `C(concat)` cost |
+
+**Properties**:
+- **Deterministic**: Fixed `zlib.compress(level=9)` — every validator computes the same similarity score
+- **Zero dependencies**: Python stdlib (`zlib`, `re`) only
+- **Fast**: ~1ms for two 32KB texts
+- **Well-studied**: NCD is used in academic plagiarism detection, malware classification, and DNA sequence comparison
+
+**Threshold rationale** (σ = 0.80):
+- **≥ 0.80**: Very likely a copy with edits — rejected
+- **0.60–0.80**: Gray zone — independently developed packs may share common patterns (e.g., "always ask before sending email"). Allowed, but δ threshold still applies
+- **< 0.60**: Clearly distinct — no restriction beyond normal δ
+
+The threshold is tunable via `similarity_threshold` in validator config.
+
 ---
 
 ## Validator Consensus
@@ -1140,6 +1228,7 @@ Bootstrap:     top-3 get 70/20/10 of miner alpha emissions
 | min_score_threshold | 0.30 | ✅ Yes |
 | Bootstrap threshold | 10 miners | ✅ Yes |
 | Epoch interval | 14400s (4h) | ✅ Yes |
+| σ (similarity threshold) | 0.80 (NCD) | ✅ Yes |
 | Context dimensions | 6 (~35M combos) | ✅ Yes |
 
 ---
