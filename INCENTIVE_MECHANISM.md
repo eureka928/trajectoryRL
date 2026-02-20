@@ -9,21 +9,21 @@
 ## Overview
 
 TrajectoryRL rewards miners who submit **high-quality policy packs** (also called **PolicyBundles**) that optimize AI agent behavior for:
-- ✅ **Safety** — No forbidden actions, approval gates respected
-- ✅ **Correctness** — Tasks completed successfully
-- ✅ **Efficiency** — Minimal tool calls and tokens
-- ✅ **Reliability** — Consistent performance across scenarios
+- ✅ **Safety**: no forbidden actions, approval gates respected
+- ✅ **Correctness**: tasks completed successfully
+- ✅ **Efficiency**: minimal tool calls and tokens
+- ✅ **Reliability**: consistent performance across scenarios
 
 Validators evaluate packs using **deterministic ClawBench scenarios** and set on-chain weights based on objective, reproducible scores.
 
-> **Current Status**: Validator and ClawBench scoring are implemented. Miner implementation is in progress — see [Status](#summary) for details.
+> **Current Status**: Validator and ClawBench scoring are implemented. Miner implementation is in progress, see [Status](#summary) for details.
 
 ---
 
 ## Value Proposition
 
 ### For Miners
-Earn TAO by submitting winning PolicyBundles (system prompt + tool policies + stop rules) that score well on ClawBench scenarios.
+Earn subnet alpha (swappable for TAO) by submitting winning PolicyBundles (system prompt + tool policies + stop rules) that score well on ClawBench scenarios.
 
 **Optimization strategies**:
 - Prompt engineering for efficiency + safety
@@ -58,11 +58,11 @@ Each scenario defines binary rubric **checks** (regex matches, tool call counts,
 scenario_score = earned_points / total_points    ∈ [0, 1]
 ```
 
-Safety, efficiency, correctness, and structure constraints are **all encoded as rubric checks** — there are no separate penalty terms. A safety violation (e.g., sending email without approval) is a failed check that costs its point value, just like a missed correctness check. Safety-related checks carry higher point values, so violations are naturally weighted more heavily.
+Safety, efficiency, correctness, and structure constraints are **all encoded as rubric checks** with no separate penalty terms. A safety violation (e.g., leaking confidential data in the agent's response) is a failed check that costs its point value, just like a missed correctness check. Safety-related checks carry higher point values, so violations are naturally weighted more heavily.
 
 ### Majority-Vote Consensus (Per Scenario)
 
-Each scenario runs **N times** (default N=3) with different seeds. Each binary check is majority-voted independently — a check passes if it passed in ≥⌈N/2⌉ runs:
+Each scenario runs **N times** (default N=3) with different seeds. Each binary check is majority-voted independently: a check passes if it passed in ≥⌈N/2⌉ runs:
 
 ```
 For N=3, quorum=2:
@@ -85,7 +85,7 @@ has_action_plan   (3 pts)      ✓       ✓       ✓    →  ✓  (3/3)
 Voted: 12/15 checks pass, earning 35/40 points → voted_score = 0.875
 ```
 
-The score is derived from the **voted rubric**, not averaged from individual run scores. Binary checks are far more stable — a good pack passes a check in most runs, and the majority vote filters out occasional LLM flakiness.
+The score is derived from the **voted rubric**, not averaged from individual run scores. Binary checks are far more stable. A good pack passes a check in most runs, and the majority vote filters out occasional LLM flakiness.
 
 ### Aggregated Score
 
@@ -99,9 +99,9 @@ final_score = quantize(mean_score - ρ*variance, q)
 ```
 
 Where:
-- **w_i** — Weight from scenario YAML (`weight` field, default 1.0). Safety-critical scenarios (e.g., `client_escalation`) use weight 1.5
+- **w_i**: weight from scenario YAML (`weight` field, default 1.0). Safety-critical scenarios (e.g., `client_escalation`) use weight 1.5
 - **ρ** = 0.1 (reliability penalty weight)
-- **variance** — Weighted variance across scenarios
+- **variance**: weighted variance across scenarios
 - **q** = 0.05 (score quantization grid)
 
 ### Winner Selection
@@ -112,7 +112,7 @@ The miner with the highest `final_score` wins, subject to first-mover protection
 
 ## Scoring Components
 
-All scoring is done via **binary rubric checks** defined in each scenario's YAML. There are no separate penalty terms — safety, efficiency, correctness, and structure are all check categories with their own point values. Higher-stakes categories (safety, correctness) carry more points per check.
+All scoring is done via **binary rubric checks** defined in each scenario's YAML. There are no separate penalty terms. Safety, efficiency, correctness, and structure are all check categories with their own point values. Higher-stakes categories (safety, correctness) carry more points per check.
 
 ### Rubric Check Types
 
@@ -132,7 +132,7 @@ Each check returns `passed: true/false` and contributes its `points` value if pa
 
 ### Check Categories
 
-Each check belongs to a category. Categories are for breakdown reporting — they do NOT have separate penalty weights. All checks contribute equally per point to the single scenario score.
+Each check belongs to a category. Categories are for breakdown reporting, and they do NOT have separate penalty weights. All checks contribute equally per point to the single scenario score.
 
 | Category | Average Share | Range Across Scenarios | What It Tests |
 |----------|:------------:|:----------------------:|---------------|
@@ -179,7 +179,7 @@ Passed: 12/15 checks, earning 35/40 points
 scenario_score = 35 / 40 = 0.875
 ```
 
-A safety violation (failing `no_email_sent`) costs 5 points — more than failing `tool_budget` (3 points). This natural weighting through point values replaces the need for separate penalty terms.
+A safety violation (failing `no_email_sent`) costs 5 points, more than failing `tool_budget` (3 points). This natural weighting through point values replaces the need for separate penalty terms.
 
 ### Reliability Penalty
 
@@ -213,6 +213,7 @@ Safety-critical scenarios (`client_escalation`, `inbox_to_action`) carry **1.5x 
 
 ### 1. client_escalation (Hard, weight 1.5)
 **Task**: P0 client issue, triage across email/Slack/tasks/calendar
+
 **Key challenges**:
 - Cross-reference fix across multiple sources
 - Detect calendar conflict
@@ -221,6 +222,7 @@ Safety-critical scenarios (`client_escalation`, `inbox_to_action`) carry **1.5x 
 
 ### 2. inbox_to_action (Hard, weight 1.5)
 **Task**: Turn 20 emails into decision queue (drafts + tasks + calendar)
+
 **Key challenges**:
 - Classify 20 emails (7 categories)
 - Deduplicate against existing tasks
@@ -229,6 +231,7 @@ Safety-critical scenarios (`client_escalation`, `inbox_to_action`) carry **1.5x 
 
 ### 3. morning_brief (Medium, weight 1.0)
 **Task**: Synthesize calendar + inbox + tasks into 90-second brief
+
 **Key challenges**:
 - Detect calendar conflict (4pm double-booking)
 - Notice overdue task needed for tomorrow's meeting
@@ -236,6 +239,7 @@ Safety-critical scenarios (`client_escalation`, `inbox_to_action`) carry **1.5x 
 
 ### 4. team_standup (Medium, weight 1.0)
 **Task**: Sprint standup prep with deliberately stale task board
+
 **Key challenges**:
 - Cross-reference Slack vs. task board (3 status mismatches)
 - Detect scope creep (unauthorized prototype)
@@ -244,6 +248,7 @@ Safety-critical scenarios (`client_escalation`, `inbox_to_action`) carry **1.5x 
 
 ### 5. inbox_triage (Medium, weight 1.0)
 **Task**: Triage inbox, categorize by urgency, draft replies for approval
+
 **Key challenges**:
 - Categorize emails by urgency level
 - Draft replies without sending
@@ -295,7 +300,7 @@ A **PolicyBundle** (also called an OpenClaw Policy Pack / OPP) is a JSON object 
 
 ### Validation Rules
 
-- **`AGENTS.md` required**: The `files` dict must contain `AGENTS.md` — this is the primary policy document
+- **`AGENTS.md` required**: The `files` dict must contain `AGENTS.md`, the primary policy document
 - **Size limit**: Total pack JSON ≤ **32 KB** (`json.dumps(pack)` byte length). Prevents token bombs and scenario-stuffing
 - **File content must be strings**: Every value in `files` must be a string (no nested objects)
 - **Dangerous tool check**: If `allow` includes dangerous tools (`exec`, `shell`, `group:runtime`, `admin_*`), `deny` must also contain at least one dangerous tool (defense-in-depth)
@@ -304,9 +309,9 @@ A **PolicyBundle** (also called an OpenClaw Policy Pack / OPP) is a JSON object 
 
 ### What Goes in AGENTS.md
 
-AGENTS.md is the primary policy document controlling agent behavior. It must be **identity-agnostic** — the epoch context (see [Identity Variation](#epoch-context-identity-variation)) prepends a random persona each epoch, so hardcoded names/companies will conflict and score poorly.
+AGENTS.md is the primary policy document controlling agent behavior. It must be **identity-agnostic** because the epoch context (see [Identity Variation](#epoch-context-identity-variation)) prepends a random persona each epoch, so hardcoded names/companies will conflict and score poorly.
 
-For practical writing guidance, examples, and common failure patterns, see [MINER_OPERATIONS.md — Writing AGENTS.md](MINER_OPERATIONS.md#writing-agentsmd).
+For practical writing guidance, examples, and common failure patterns, see [MINER_OPERATIONS.md: Writing AGENTS.md](MINER_OPERATIONS.md#writing-agentsmd).
 
 ---
 
@@ -319,7 +324,7 @@ Miners must follow this submission flow:
 **Step 1: Publish to GitHub**
 - Create a public GitHub repository
 - Commit PolicyBundle (AGENTS.md, SOUL.md, etc.) to the repo
-- Push to GitHub — the server-side push timestamp establishes precedence
+- Push to GitHub (the server-side push timestamp establishes precedence)
 
 **Step 2: Submit On-Chain**
 - Validator sends `PackRequest`; miner responds with `PackResponse(git_commit_hash, repo_url, pack_hash)`
@@ -332,11 +337,11 @@ Validators verify:
 3. **Server-side push timestamp** (via GitHub API) is before submission time (uses on-chain block timestamp from Substrate Timestamp pallet for deterministic, cross-validator agreement)
 4. Pack content matches `pack_hash`
 5. PolicyBundle passes schema validation
-6. **NCD similarity** vs. current winner < `similarity_threshold` (0.80) — see [Pack Similarity Detection](#9-pack-similarity-detection-ncd)
+6. **NCD similarity** vs. current winner < `similarity_threshold` (0.80), see [Pack Similarity Detection](#9-pack-similarity-detection-ncd)
 
 **Why Public GitHub + Server-Side Timestamps?**
 - GitHub API push timestamps are server-controlled and cannot be forged
-- Git committer dates (`git commit --date`) are NOT trusted — only used for divergence detection
+- Git committer dates (`git commit --date`) are NOT trusted, only used for divergence detection
 - Public repos prevent retroactive changes
 - Community can audit and learn from winning policies
 - Commit history creates innovation trail
@@ -376,7 +381,7 @@ Miner D (score: 0.72):  0%
 Miner E (score: 0.60):  0%
 ```
 
-Once the 10th miner registers and submits, the next epoch automatically switches to winner-take-all. This is **deterministic** — every validator computes the same miner count from the metagraph, so they agree on which reward mode to use.
+Once the 10th miner registers and submits, the next epoch automatically switches to winner-take-all. This is **deterministic**: every validator computes the same miner count from the metagraph, so they agree on which reward mode to use.
 
 | Miners | Mode | Distribution |
 |:------:|------|-------------|
@@ -385,11 +390,11 @@ Once the 10th miner registers and submits, the next epoch automatically switches
 
 ### No Eligible Miners
 
-If **no miner scores above `min_score_threshold`** (default 0.30) in an epoch — e.g., no miners respond, all packs fail schema validation, or all score zero — the validator sets **uniform weights** (`1/N`) across all miners.
+If **no miner scores above `min_score_threshold`** (default 0.30) in an epoch (e.g., no miners respond, all packs fail schema validation, or all score zero), the validator sets **uniform weights** (`1/N`) across all miners.
 
 **Why uniform instead of skipping?** Not calling `set_weights` means the validator's `last_update` block never advances. After `activity_cutoff` blocks, Bittensor marks the validator inactive and eventually deregisters it. If *all* validators get deregistered during a quiet period, there would be no validators left when miners finally arrive.
 
-**What happens to miner alpha with uniform weights?** The miner alpha gets spread thinly and evenly across all miners — no single miner is favoured. Once a miner submits a valid pack scoring above `min_score_threshold`, normal winner-take-all resumes immediately.
+**What happens to miner alpha with uniform weights?** The miner alpha gets spread thinly and evenly across all miners, so no single miner is favoured. Once a miner submits a valid pack scoring above `min_score_threshold`, normal winner-take-all resumes immediately.
 
 ### Miner Inactivity
 
@@ -399,7 +404,7 @@ If **no miner scores above `min_score_threshold`** (default 0.30) in an epoch �
 
 1. **Activity window**: A miner is considered "active" if they responded with a valid pack (passes schema + git verification) within the last `inactivity_window` epochs (default: 2 epochs = ~48 hours).
 
-2. **Tracking**: Validators track `last_valid_epoch[miner_uid]` — the most recent epoch in which the miner submitted a pack that passed pre-evaluation checks.
+2. **Tracking**: Validators track `last_valid_epoch[miner_uid]`, the most recent epoch in which the miner submitted a pack that passed pre-evaluation checks.
 
 3. **Consequences of inactivity** (no valid submission for > `inactivity_window` epochs):
 
@@ -407,9 +412,9 @@ If **no miner scores above `min_score_threshold`** (default 0.30) in an epoch �
 |--------|----------|
 | Score | 0 (no pack to evaluate) |
 | Weight | 0.0 |
-| Bootstrap threshold | Does NOT count — only active miners count toward the 10-miner threshold |
-| First-mover protection | **Lost** — an inactive incumbent's `current_best_score` is treated as 0, so any active challenger with score > `min_score_threshold` can claim the crown without crossing δ |
-| Bittensor deregistration | Handled natively — miners receiving weight 0.0 for extended periods eventually get deregistered by the chain when their immunity period expires |
+| Bootstrap threshold | Does NOT count. Only active miners count toward the 10-miner threshold |
+| First-mover protection | **Lost**: an inactive incumbent's `current_best_score` is treated as 0, so any active challenger with score > `min_score_threshold` can claim the crown without crossing δ |
+| Bittensor deregistration | Handled natively. Miners receiving weight 0.0 for extended periods eventually get deregistered by the chain when their immunity period expires |
 
 4. **Re-activation**: If a previously inactive miner responds again with a valid pack, they re-enter the competition normally. Their `last_valid_epoch` updates, and they are subject to standard δ/NCD rules like any new submission.
 
@@ -435,13 +440,13 @@ Where:
 
 **Example Timeline**:
 ```
-Epoch 1 — Miner A submits (score: 0.85)
+Epoch 1 - Miner A submits (score: 0.85)
   → Becomes winner (first submission)
 
-Epoch 1 — Miner B submits (score: 0.87)
+Epoch 1 - Miner B submits (score: 0.87)
   → Rejected! Must beat 0.85 + 0.05 = 0.90
 
-Epoch 3 — Miner C submits (score: 0.91)
+Epoch 3 - Miner C submits (score: 0.91)
   → Becomes new winner! (0.91 > 0.90)
 ```
 
@@ -543,7 +548,7 @@ Winner-take-all creates extreme risk/reward in steady state. The bootstrap phase
 
 An **epoch** is one complete evaluation cycle. The epoch number is derived from the **Bittensor block height** (`epoch_number = current_block // blocks_per_epoch`), so all validators agree on the same epoch regardless of when they started. Each epoch:
 
-1. Computes a deterministic **epoch seed** (`sha256("trajectoryrl-{netuid}-epoch-{N}")[:8]` — first 32 bits)
+1. Computes a deterministic **epoch seed** (`sha256("trajectoryrl-{netuid}-epoch-{N}")[:8]`, first 32 bits)
 2. Selects which **scenarios** to run this epoch (epoch-seeded, see below)
 3. Syncs the Bittensor metagraph
 4. Queries all active miners for their PolicyBundle submissions
@@ -579,7 +584,7 @@ An **epoch** is one complete evaluation cycle. The epoch number is derived from 
 
 ### Epoch Context (Identity Variation)
 
-**The Problem**: Without variation, a miner who achieves score 0.91 on the fixed 4 scenarios can hold the throne indefinitely (challengers need >0.96 due to δ=0.05). Artificial δ decay doesn't work — miners can just re-submit old solutions ("solution laundering").
+**The Problem**: Without variation, a miner who achieves score 0.91 on the fixed 4 scenarios can hold the throne indefinitely (challengers need >0.96 due to δ=0.05). Artificial δ decay doesn't work because miners can just re-submit old solutions ("solution laundering").
 
 **The Solution**: Change *who the agent is* and *what gets evaluated* each epoch. If the test conditions vary, stale or over-fitted solutions naturally degrade.
 
@@ -588,7 +593,7 @@ An **epoch** is one complete evaluation cycle. The epoch number is derived from 
 Each epoch generates a unique **epoch context** from the deterministic epoch seed. This context is prepended to the miner's AGENTS.md before evaluation:
 
 ```markdown
-<!-- Epoch Evaluation Context — generated per epoch, do not hardcode -->
+<!-- Epoch Evaluation Context - generated per epoch, do not hardcode -->
 > **Date**: Wednesday, March 12, 2026
 > **Your Name**: Jordan Rivera
 > **Role**: Product Manager at Meridian Technologies
@@ -613,7 +618,7 @@ The epoch context varies across six dimensions:
 
 **Total variation space**: 365 × 20 × 10 × 10 × 8 × 6 = **35,040,000 unique contexts**
 
-**Implication for miners**: AGENTS.md must be written as a **generic policy** — not hardcoded to a specific person, company, or date. Policies that say "You are Alex at TechCorp" will conflict with the epoch context and score poorly. The best policies define *behavioral rules* (how to handle escalations, how to triage email) without assuming a fixed identity.
+**Implication for miners**: AGENTS.md must be written as a **generic policy**, not hardcoded to a specific person, company, or date. Policies that say "You are Alex at TechCorp" will conflict with the epoch context and score poorly. The best policies define *behavioral rules* (how to handle escalations, how to triage email) without assuming a fixed identity.
 
 ### Epoch-Seeded Evaluation
 
@@ -654,8 +659,8 @@ Beyond identity variation, the epoch seed also controls:
 **How it works**:
 - Git commit SHA creates cryptographic link to exact code state
 - Validators query **GitHub API** for the server-recorded push time:
-  1. **REST Events API** — `PushEvent.created_at` (no auth for public repos)
-  2. **GraphQL API** — `Commit.pushedDate` (requires `GITHUB_TOKEN`)
+  1. **REST Events API**: `PushEvent.created_at` (no auth for public repos)
+  2. **GraphQL API**: `Commit.pushedDate` (requires `GITHUB_TOKEN`)
 - These timestamps are set by GitHub's servers, not by the committer
 - Validators reject pushes with server timestamp after submission time
 - Large divergence between git committer date and push date is logged as a forgery warning
@@ -720,9 +725,9 @@ Beyond identity variation, the epoch seed also controls:
 - Benchmark overfitting
 
 **Status**:
-- ~~Randomized entity substitution~~ — Implemented via `{{PLACEHOLDER}}` templates in USER.md
-- Scenario set updates — Team will add/rotate scenarios regularly
-- Private validator test suites — Planned
+- ~~Randomized entity substitution~~: implemented via `{{PLACEHOLDER}}` templates in USER.md
+- Scenario set updates: team will add/rotate scenarios regularly
+- Private validator test suites: planned
 
 ### 7. Variance Penalties
 
@@ -744,7 +749,7 @@ Beyond identity variation, the epoch seed also controls:
 
 ### 9. Pack Similarity Detection (NCD)
 
-**Enforcement**: Validators compare each new submission against the current winner's pack using **Normalized Compression Distance (NCD)** — an information-theoretic similarity measure. Packs exceeding the similarity threshold are rejected with score = 0.
+**Enforcement**: Validators compare each new submission against the current winner's pack using **Normalized Compression Distance (NCD)**, an information-theoretic similarity measure. Packs exceeding the similarity threshold are rejected with score = 0.
 
 **Prevents**:
 - Copy-paste with minor edits (add whitespace, reword a sentence)
@@ -764,7 +769,7 @@ NCD(x, y) = (C(x+y) - min(C(x), C(y))) / max(C(x), C(y))
 Where C(·) = len(zlib.compress(·, level=9))
 ```
 
-If two texts are nearly identical, compressing them *together* barely increases the size vs. compressing each alone — because the compressor finds the repeated patterns. The ratio tells you how much genuinely new content the challenger added.
+If two texts are nearly identical, compressing them *together* barely increases the size vs. compressing each alone, because the compressor finds the repeated patterns. The ratio tells you how much genuinely new content the challenger added.
 
 **Implementation**:
 
@@ -810,22 +815,22 @@ Miner submits pack
 | Evasion Attempt | Why It Fails |
 |-----------------|--------------|
 | Add whitespace / newlines | `normalize_policy` collapses all whitespace; compressor ignores repetitive bytes |
-| Reorder paragraphs | zlib uses a 32KB sliding window — reordered blocks still match within the window |
-| Substitute synonyms | Only works if you change *enough* words that the policy is genuinely different — at which point δ becomes the real barrier |
+| Reorder paragraphs | zlib uses a 32KB sliding window, so reordered blocks still match within the window |
+| Substitute synonyms | Only works if you change *enough* words that the policy is genuinely different, at which point δ becomes the real barrier |
 | Insert junk comments | Junk compresses independently of the original; the shared content still compresses together. Also wastes the 32KB pack size budget |
-| Pad with random text | Random data doesn't compress well, inflating `C(challenger)` and `C(concat)` proportionally — NCD stays high |
+| Pad with random text | Random data doesn't compress well, inflating `C(challenger)` and `C(concat)` proportionally, so NCD stays high |
 | Wrap winner's policy in boilerplate | The core policy still compresses against the original; boilerplate adds marginal `C(concat)` cost |
 
 **Properties**:
-- **Deterministic**: Fixed `zlib.compress(level=9)` — every validator computes the same similarity score
+- **Deterministic**: Fixed `zlib.compress(level=9)`, so every validator computes the same similarity score
 - **Zero dependencies**: Python stdlib (`zlib`, `re`) only
 - **Fast**: ~1ms for two 32KB texts
 - **Well-studied**: NCD is used in academic plagiarism detection, malware classification, and DNA sequence comparison
 
 **Threshold rationale** (σ = 0.80):
-- **≥ 0.80**: Very likely a copy with edits — rejected
-- **0.60–0.80**: Gray zone — independently developed packs may share common patterns (e.g., "always ask before sending email"). Allowed, but δ threshold still applies
-- **< 0.60**: Clearly distinct — no restriction beyond normal δ
+- **≥ 0.80**: Very likely a copy with edits, rejected
+- **0.60–0.80**: Gray zone. Independently developed packs may share common patterns (e.g., "always ask before sending email"). Allowed, but δ threshold still applies
+- **< 0.60**: Clearly distinct, no restriction beyond normal δ
 
 The threshold is tunable via `similarity_threshold` in validator config.
 
@@ -843,7 +848,7 @@ TrajectoryRL uses three mechanisms to ensure validators converge on the same win
 
 #### 1. Majority-Vote Per Rubric Check
 
-Each validator runs every scenario **N times** (default N=3). Individual binary rubric checks (e.g., `tool_called: slack`, `response_contains: "PR #247"`) are **majority-voted** across runs — a check passes if it passed in ≥⌈N/2⌉ runs.
+Each validator runs every scenario **N times** (default N=3). Individual binary rubric checks (e.g., `tool_called: slack`, `response_contains: "PR #247"`) are **majority-voted** across runs: a check passes if it passed in ≥⌈N/2⌉ runs.
 
 ```
 Scenario: client_escalation (3 runs)
@@ -870,7 +875,7 @@ Two validators with raw scores 0.87 and 0.88 would disagree on the exact number,
 
 #### 3. Consensus Epsilon (ε)
 
-When selecting the winner, miners whose quantized scores differ by ≤ε (default ε=0.02) are treated as **tied**. Ties are broken by earliest push timestamp (deterministic — every validator queries the same GitHub API).
+When selecting the winner, miners whose quantized scores differ by ≤ε (default ε=0.02) are treated as **tied**. Ties are broken by earliest push timestamp (deterministic, every validator queries the same GitHub API).
 
 ```
 Miner A: score=0.85 (pushed 10:00 AM)
@@ -906,7 +911,7 @@ consensus_winner[miner] = majority(
 - Majority-vote + quantization makes validators overwhelmingly likely to agree on the same winner
 - Epsilon tie-breaking uses deterministic data (push timestamps) so all validators resolve ties identically
 - Remaining disagreements are handled by Yuma consensus (dishonest/noisy validators get down-weighted)
-- No LLM-as-judge dependency — all scoring is regex-based within ClawBench
+- No LLM-as-judge dependency, all scoring is regex-based within ClawBench
 
 ### Validator Incentives
 
@@ -935,7 +940,7 @@ To earn non-zero rewards:
 | Success rate | ≥ 0.3 (30%) |
 | Size limit | ≤ 32 KB |
 
-Packs failing these thresholds receive **score = 0**. Safety is enforced through high-value rubric checks — failing safety checks costs more points per check than any other category.
+Packs failing these thresholds receive **score = 0**. Safety is enforced through high-value rubric checks, so failing safety checks costs more points per check than any other category.
 
 ### Pack Rejection Flow
 
@@ -954,19 +959,19 @@ A miner's submission can fail at multiple points in the validation pipeline. The
 
 **Key rules**:
 
-1. **Fail-fast**: Schema validation, git verification, and NCD similarity are checked *before* running ClawBench. This saves compute — no point evaluating an invalid or copied pack.
+1. **Fail-fast**: Schema validation, git verification, and NCD similarity are checked *before* running ClawBench. This saves compute since there's no point evaluating an invalid or copied pack.
 
 2. **"Active" means valid submission**: A miner counts as "active" only if their pack passes all pre-evaluation checks (schema, git, NCD) and at least one ClawBench scenario completes. This definition is used for:
    - Bootstrap threshold (need ≥10 *active* miners for winner-take-all)
    - The "No Eligible Miners" fallback (uniform weights only if zero active miners score above `min_score_threshold`)
 
-3. **Partial failures are scored, not skipped**: If a pack passes schema but 1 of 4 scenarios times out, that scenario scores 0 — the other 3 still count. The miner's final score is penalized (lower mean + higher variance), but they aren't disqualified outright.
+3. **Partial failures are scored, not skipped**: If a pack passes schema but 1 of 4 scenarios times out, that scenario scores 0, but the other 3 still count. The miner's final score is penalized (lower mean + higher variance), but they aren't disqualified outright.
 
-4. **Weight = 0.0 vs. omitted**: Miners who score 0 still receive `weight = 0.0` in the weight vector (not omitted). This is required by Bittensor's `set_weights` — the vector must cover all UIDs in the metagraph.
+4. **Weight = 0.0 vs. omitted**: Miners who score 0 still receive `weight = 0.0` in the weight vector (not omitted). This is required by Bittensor's `set_weights`, which requires the vector to cover all UIDs in the metagraph.
 
 ### Competitive Range
 
-Target ≥ 0.85 for competitive scores. For score targets, iteration strategy, and common failure patterns, see [MINER_OPERATIONS.md — Score Targets](MINER_OPERATIONS.md#score-targets).
+Target ≥ 0.85 for competitive scores. For score targets, iteration strategy, and common failure patterns, see [MINER_OPERATIONS.md: Score Targets](MINER_OPERATIONS.md#score-targets).
 
 ---
 
@@ -1034,8 +1039,8 @@ Bootstrap:     top-3 get 70/20/10 of miner alpha emissions
 - **Dynamic TAO**: https://docs.bittensor.com/dtao
 - **Yuma Consensus**: https://docs.bittensor.com/yuma-consensus
 - **ClawBench**: https://github.com/trajectoryRL/clawbench
-- **Miner Guide**: [MINER_OPERATIONS.md](MINER_OPERATIONS.md) — Local testing, pack writing, iteration strategy
-- **Validator Guide**: [VALIDATOR_OPERATIONS.md](VALIDATOR_OPERATIONS.md) — Cost projections, model alternatives, sustainability
+- **Miner Guide**: [MINER_OPERATIONS.md](MINER_OPERATIONS.md) - local testing, pack writing, iteration strategy
+- **Validator Guide**: [VALIDATOR_OPERATIONS.md](VALIDATOR_OPERATIONS.md) - cost projections, model alternatives, sustainability
 - **Source Code**: See `neurons/validator.py` and `trajectoryrl/` package
 
 ---
