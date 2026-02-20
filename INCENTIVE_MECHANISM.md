@@ -395,6 +395,34 @@ If **no miner scores above `min_score_threshold`** (default 0.30) in an epoch �
 
 **What happens to miner alpha with uniform weights?** The miner alpha gets spread thinly and evenly across all miners — no single miner is favoured. Once a miner submits a valid pack scoring above `min_score_threshold`, normal winner-take-all resumes immediately.
 
+### Miner Inactivity
+
+**Problem**: What if a miner registers, wins once, then stops responding? Without explicit handling, the miner's stale pack could hold the throne indefinitely (protected by δ), and the miner could count toward the bootstrap threshold despite being offline.
+
+**Rules**:
+
+1. **Activity window**: A miner is considered "active" if they responded with a valid pack (passes schema + git verification) within the last `inactivity_window` epochs (default: 6 epochs = ~24 hours).
+
+2. **Tracking**: Validators track `last_valid_epoch[miner_uid]` — the most recent epoch in which the miner submitted a pack that passed pre-evaluation checks.
+
+3. **Consequences of inactivity** (no valid submission for > `inactivity_window` epochs):
+
+| Effect | Behavior |
+|--------|----------|
+| Score | 0 (no pack to evaluate) |
+| Weight | 0.0 |
+| Bootstrap threshold | Does NOT count — only active miners count toward the 10-miner threshold |
+| First-mover protection | **Lost** — an inactive incumbent's `current_best_score` is treated as 0, so any active challenger with score > `min_score_threshold` can claim the crown without crossing δ |
+| Bittensor deregistration | Handled natively — miners receiving weight 0.0 for extended periods eventually get deregistered by the chain when their immunity period expires |
+
+4. **Re-activation**: If a previously inactive miner responds again with a valid pack, they re-enter the competition normally. Their `last_valid_epoch` updates, and they are subject to standard δ/NCD rules like any new submission.
+
+**Why `inactivity_window = 6`?** At one epoch per 4 hours, this gives miners 24 hours of downtime (maintenance, key rotation, etc.) before losing first-mover protection. Short enough to prevent indefinite stale-pack squatting; long enough to tolerate operational hiccups.
+
+| Parameter | Value | Tunable? |
+|-----------|-------|----------|
+| `inactivity_window` | 6 epochs (~24h) | Yes |
+
 ### First-Mover Protection
 
 To prevent copy-paste attacks, validators enforce **chronological precedence**:
@@ -917,6 +945,33 @@ To earn non-zero rewards:
 
 Packs failing these thresholds receive **score = 0**. Safety is enforced through high-value rubric checks — failing safety checks costs more points per check than any other category.
 
+### Pack Rejection Flow
+
+A miner's submission can fail at multiple points in the validation pipeline. The table below specifies the exact outcome for each failure mode:
+
+| Failure | Score | Weight | Counts as Active? | ClawBench Runs? |
+|---------|:-----:|:------:|:------------------:|:---------------:|
+| **No response** to PackRequest | 0 | 0.0 | No | Skipped |
+| **Invalid git repo** (404, private, bad commit) | 0 | 0.0 | No | Skipped |
+| **Schema validation failure** (missing AGENTS.md, >32KB, bad semver) | 0 | 0.0 | No | Skipped |
+| **NCD similarity** ≥ threshold vs. current winner | 0 | 0.0 | No | Skipped |
+| **ClawBench timeout** (scenario exceeds `timeout_per_scenario`) | 0 for that scenario | Computed | Yes | Partial |
+| **ClawBench error** (LLM API failure, runtime crash) | 0 for that scenario | Computed | Yes | Partial |
+| **Score < `min_score_threshold`** (0.30) | Computed but treated as 0 for rewards | 0.0 | Yes | Full |
+| **Valid pack, above threshold** | Computed | Computed | Yes | Full |
+
+**Key rules**:
+
+1. **Fail-fast**: Schema validation, git verification, and NCD similarity are checked *before* running ClawBench. This saves compute — no point evaluating an invalid or copied pack.
+
+2. **"Active" means valid submission**: A miner counts as "active" only if their pack passes all pre-evaluation checks (schema, git, NCD) and at least one ClawBench scenario completes. This definition is used for:
+   - Bootstrap threshold (need ≥10 *active* miners for winner-take-all)
+   - The "No Eligible Miners" fallback (uniform weights only if zero active miners score above `min_score_threshold`)
+
+3. **Partial failures are scored, not skipped**: If a pack passes schema but 1 of 4 scenarios times out, that scenario scores 0 — the other 3 still count. The miner's final score is penalized (lower mean + higher variance), but they aren't disqualified outright.
+
+4. **Weight = 0.0 vs. omitted**: Miners who score 0 still receive `weight = 0.0` in the weight vector (not omitted). This is required by Bittensor's `set_weights` — the vector must cover all UIDs in the metagraph.
+
 ### Competitive Range
 
 Projected score distribution (based on internal testing):
@@ -959,6 +1014,8 @@ where winner = miner with highest quantized score that satisfies:
   - github_push_timestamp < on_chain_submission_time (server-side, not forgeable)
   - public GitHub repo with valid commit
   - pack passes OPP v1 schema validation (AGENTS.md required, ≤32KB)
+  - pack_similarity(pack, current_winner) < σ (NCD similarity check)
+  - miner active within last inactivity_window epochs
 ```
 
 ### Rewards
@@ -983,6 +1040,7 @@ Bootstrap:     top-3 get 70/20/10 of miner alpha emissions
 | Bootstrap threshold | 10 miners | ✅ Yes |
 | Epoch interval | 14400s (4h) | ✅ Yes |
 | σ (similarity threshold) | 0.80 (NCD) | ✅ Yes |
+| Inactivity window | 6 epochs (~24h) | ✅ Yes |
 | Context dimensions | 6 (~35M combos) | ✅ Yes |
 
 ---
