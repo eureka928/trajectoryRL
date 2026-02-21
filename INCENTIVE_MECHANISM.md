@@ -39,7 +39,7 @@ Winning policies get packaged and licensed to agent platforms who pay for:
 
 **Example ROI**:
 ```
-Unoptimized GPT-4 (1,000 tasks/day):  $12,300/month
+Unoptimized Opus 4.6 (1,000 tasks/day):  $12,300/month
 TrajectoryRL-optimized prompts:       $3,300/month  (73% reduction)
 Distilled LoRA (Qwen 7B):             $120/month    (99% reduction)
 ```
