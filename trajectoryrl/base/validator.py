@@ -247,6 +247,11 @@ class TrajectoryValidator:
                     logger.info(f"Epoch {self.current_epoch} starting")
                     logger.info("=" * 60)
 
+                    # Clear caches so packs are re-evaluated under the new
+                    # epoch seed / context (even if pack_hash is unchanged).
+                    self.pack_score_cache.clear()
+                    self._uid_packs.clear()
+
                     await self.run_epoch()
                     last_completed_epoch = self.current_epoch
                     self.last_weight_block = current_block
