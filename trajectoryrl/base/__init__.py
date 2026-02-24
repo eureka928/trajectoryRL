@@ -1,3 +1,4 @@
 """Base classes."""
 from trajectoryrl.base.validator import TrajectoryValidator
-__all__ = ["TrajectoryValidator"]
+from trajectoryrl.base.miner import TrajectoryMiner
+__all__ = ["TrajectoryValidator", "TrajectoryMiner"]
