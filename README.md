@@ -83,7 +83,7 @@ docker compose up -d
 docker compose logs -f validator
 ```
 
-One command starts everything: the validator, ClawBench mock-tools, and the OpenClaw AI gateway. `--watch` monitors the local repo for changes — after `git pull`, the validator automatically picks up new scenarios, scoring updates, and code fixes without manual container rebuilds. ClawBench is pinned to v0.3.0 (`b718230`) for validator consensus.
+One command starts everything: the validator, ClawBench mock-tools, and the OpenClaw AI gateway. `--watch` monitors the local repo for changes — after `git pull`, the validator automatically picks up new scenarios, scoring updates, and code fixes without manual container rebuilds. ClawBench is pinned via git submodule (`e50824d`, v0.3.0+22) for validator consensus.
 
 ### Model Selection
 
@@ -137,7 +137,10 @@ trajectoryrl/
 │   ├── validator.py           # python neurons/validator.py
 │   └── miner.py               # python neurons/miner.py
 │
-├── docker/                    # Dockerfiles
+├── clawbench/                 # Git submodule — scenarios, fixtures, scoring
+├── openclaw/                  # Git submodule — AI gateway (Dockerfile.clawbench)
+│
+├── docker/                    # Dockerfiles (validator, miner)
 │   ├── Dockerfile.validator
 │   └── Dockerfile.miner
 │
@@ -278,13 +281,14 @@ TrajectoryRL uses [ClawBench](https://github.com/trajectoryRL/clawbench) for det
 
 ### Version Pinning
 
-ClawBench is **pinned as a git submodule** to ensure validator consensus:
+Both ClawBench and OpenClaw are **pinned as git submodules** to ensure validator consensus:
 
-- **Version**: v0.3.0 (commit `b718230`)
+- **ClawBench**: v0.3.0+22 (commit `e50824d`) — scenarios, fixtures, scoring
+- **OpenClaw**: commit `b5ffec1` — AI gateway with ClawBench tools plugin
 - **Automatic**: Cloned with `git clone --recursive`
 - **Update**: `git submodule update --init --recursive`
 
-This ensures all validators evaluate packs with identical scoring logic, preventing consensus failures from version drift.
+This ensures all validators evaluate packs with identical scoring logic and gateway behavior, preventing consensus failures from version drift.
 
 ## Development
 

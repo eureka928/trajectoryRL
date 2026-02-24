@@ -23,12 +23,12 @@ services:
   # --------------------------------------------------------------------------
   init:
     build:
-      context: ../clawbench
+      context: ./clawbench
       dockerfile: Dockerfile.init
     container_name: trajectoryrl_init
     volumes:
-      - ../clawbench/fixtures:/fixtures:ro
-      - ../clawbench/scenarios:/scenarios:ro
+      - ./clawbench/fixtures:/fixtures:ro
+      - ./clawbench/scenarios:/scenarios:ro
       - workspace:/workspace
     environment:
       - SCENARIO=${SCENARIO:-client_escalation}
@@ -45,12 +45,12 @@ services:
   # --------------------------------------------------------------------------
   mock-tools:
     build:
-      context: ../clawbench
+      context: ./clawbench
       dockerfile: Dockerfile.mock-tools
     container_name: trajectoryrl_mock_tools
     restart: unless-stopped
     volumes:
-      - ../clawbench/fixtures:/fixtures:ro
+      - ./clawbench/fixtures:/fixtures:ro
     environment:
       - FIXTURES_PATH=/fixtures
       - SCENARIO=${SCENARIO:-client_escalation}
@@ -80,13 +80,13 @@ services:
   # --------------------------------------------------------------------------
   openclaw:
     build:
-      context: ../openclaw
+      context: ./openclaw
       dockerfile: Dockerfile.clawbench
     container_name: trajectoryrl_openclaw
     restart: unless-stopped
     volumes:
       - workspace:/workspace
-      - ../clawbench/config/openclaw.json:/home/node/.openclaw/openclaw.json:ro
+      - ./clawbench/config/openclaw.json:/home/node/.openclaw/openclaw.json:ro
     environment:
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}

@@ -1,3 +1,6 @@
 [submodule "clawbench"]
 	path = clawbench
 	url = https://github.com/trajectoryRL/clawbench.git
+[submodule "openclaw"]
+	path = openclaw
+	url = https://github.com/trajectoryRL/openclaw.git
