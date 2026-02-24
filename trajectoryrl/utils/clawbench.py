@@ -467,26 +467,30 @@ class ClawBenchHarness:
         """
         # run_episode.py outputs JSON when --json flag is used
         # Format: {"score": 0.9, "success": true, "tool_calls": 12, ...}
-        try:
-            # Find JSON in output (may have logging before it)
-            lines = output.strip().split("\n")
-            for line in reversed(lines):
-                if line.strip().startswith("{"):
-                    return json.loads(line)
+        # Scan lines in reverse; require "score" key to distinguish the
+        # result object from stray JSON log lines.
+        lines = output.strip().split("\n")
+        for line in reversed(lines):
+            line = line.strip()
+            if not line.startswith("{"):
+                continue
+            try:
+                data = json.loads(line)
+                if isinstance(data, dict) and "score" in data:
+                    return data
+            except json.JSONDecodeError:
+                continue
 
-            raise ValueError("No JSON found in output")
-
-        except (json.JSONDecodeError, ValueError) as e:
-            logger.error(f"Failed to parse episode output: {e}")
-            logger.debug(f"Output was: {output}")
-            return {
-                "score": 0.0,
-                "success": False,
-                "tool_calls": 0,
-                "response": "",
-                "rubric": {},
-                "error": f"Parse error: {e}"
-            }
+        logger.error("Failed to parse episode output: no result JSON found")
+        logger.debug(f"Output was: {output}")
+        return {
+            "score": 0.0,
+            "success": False,
+            "tool_calls": 0,
+            "response": "",
+            "rubric": {},
+            "error": "Parse error: no result JSON found",
+        }
 
     def _compute_hash(self, pack: dict) -> str:
         """Compute SHA256 hash of pack.
