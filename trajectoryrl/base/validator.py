@@ -576,10 +576,15 @@ class TrajectoryValidator:
         """
         scores = self.cached_scores
 
+        # Always sync metagraph so UID/hotkey mappings are fresh
+        try:
+            self.metagraph.sync(subtensor=self.subtensor)
+        except Exception as e:
+            logger.warning(f"Metagraph sync failed, using cached: {e}")
+
         # If score publisher is configured, use stake-weighted consensus
         if self.score_publisher:
             try:
-                self.metagraph.sync(subtensor=self.subtensor)
                 score_files = await self.score_publisher.pull_all_scores(
                     self.current_epoch
                 )
