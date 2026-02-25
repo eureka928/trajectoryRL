@@ -14,27 +14,27 @@ TrajectoryRL is a Bittensor subnet where miners compete to optimize AI agent pol
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
-│                   TRAJECTORYRL SUBNET (SN11)                  │
-│                                                               │
-│  MINERS                              VALIDATORS               │
-│  ┌──────────────┐                    ┌──────────────────┐   │
+│                   TRAJECTORYRL SUBNET (SN11)                 │
+│                                                              │
+│  MINERS                              VALIDATORS              │
+│  ┌───────────────┐                   ┌───────────────────┐   │
 │  │ Publish       │   on-chain        │ Read commitments  │   │
 │  │ pack.json to  │   commitment      │ from chain        │   │
 │  │ public GitHub │──────────────────▶│                   │   │
 │  │ repo          │                   │ Fetch packs from  │   │
-│  └──────────────┘                    │ GitHub, verify    │   │
-│        │                              │ hash + timestamp  │   │
-│        │                              │                   │   │
-│        │                              │ Evaluate via      │   │
-│        │                              │ ClawBench         │   │
-│        │                              └──────────────────┘   │
-│        │                                      │               │
-│        │                                      │ set_weights   │
-│        ▼                                      ▼               │
-│  ┌──────────────────────────────────────────────────────┐   │
-│  │              BITTENSOR BLOCKCHAIN                     │   │
-│  │   Commitments, weights, TAO rewards                   │   │
-│  └──────────────────────────────────────────────────────┘   │
+│  └───────────────┘                   │ GitHub, verify    │   │
+│        │                             │ hash + timestamp  │   │
+│        │                             │                   │   │
+│        │                             │ Evaluate via      │   │
+│        │                             │ ClawBench         │   │
+│        │                             └───────────────────┘   │
+│        │                                      │              │
+│        │                                      │ set_weights  │
+│        ▼                                      ▼              │
+│  ┌──────────────────────────────────────────────────────┐    │
+│  │              BITTENSOR BLOCKCHAIN                    │    │
+│  │   Commitments, weights, TAO rewards                  │    │
+│  └──────────────────────────────────────────────────────┘    │
 └──────────────────────────────────────────────────────────────┘
 ```
 
