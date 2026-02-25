@@ -6,6 +6,8 @@
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![Bittensor](https://img.shields.io/badge/bittensor-7.0+-green.svg)](https://github.com/opentensor/bittensor)
 
+> **Status: Cold-Start Phase** — The subnet is bootstrapping. Validators are setting weights to anchor consensus. Full ClawBench evaluation is coming soon. Miners can register and prepare packs now.
+
 TrajectoryRL is a Bittensor subnet where miners compete to optimize AI agent policies for real-world tasks. Validators evaluate policy packs using deterministic scenarios, rewarding agents that are **safe**, **efficient**, and **reliable**.
 
 ## Overview
@@ -64,163 +66,181 @@ TrajectoryRL employs three layers of protection against copy-paste attacks:
 
 ### For Validators
 
-```bash
-# 1. Clone repo with submodules
-git clone --recursive https://github.com/trajectoryRL/trajectoryrl.git
-cd trajectoryrl
-
-# 2. Configure
-cp .env.example .env
-# Edit .env: add your ANTHROPIC_API_KEY and wallet info
-
-# 3. Start with auto-update (watches for code changes)
-docker compose up --watch
-
-# Or run detached (no auto-update)
-docker compose up -d
-
-# 4. View logs
-docker compose logs -f validator
-```
-
-One command starts everything: the validator, ClawBench mock-tools, and the OpenClaw AI gateway. `--watch` monitors the local repo for changes — after `git pull`, the validator automatically picks up new scenarios, scoring updates, and code fixes without manual container rebuilds. ClawBench is pinned via git submodule (`e50824d`, v0.3.0+22) for validator consensus.
-
-### Model Selection
-
-All validators **must** use the designated model for consensus:
+Validators run via Docker with automatic updates from GHCR via Watchtower. When new code is pushed to `main`, GitHub Actions builds a new image and Watchtower auto-pulls and restarts within 5 minutes.
 
 ```bash
-# In .env (default — do not change)
-CLAWBENCH_MODEL=anthropic/claude-sonnet-4-5-20250929
+# 1. Create .env.validator
+cat > .env.validator <<'EOF'
+WALLET_NAME=your-wallet
+WALLET_HOTKEY=default
+NETUID=11
+NETWORK=finney
+EOF
+
+# 2. Start validator + Watchtower (auto-updates from GHCR)
+docker compose -f docker/docker-compose.validator.yml --env-file .env.validator up -d
+
+# 3. View logs
+docker compose -f docker/docker-compose.validator.yml logs -f validator
 ```
 
-Using a different model will produce different tool-call sequences and scoring outcomes, putting your validator out of consensus. See [VALIDATOR_OPERATIONS.md](VALIDATOR_OPERATIONS.md) for details.
+Requirements:
+- Docker + Docker Compose
+- A registered hotkey on SN11 with sufficient stake for a validator permit (top 64 by stake)
+- Wallet files in `~/.bittensor/wallets/`
 
 ### For Miners
 
+Miners compete by creating **policy packs** — instruction bundles (AGENTS.md + optional SOUL.md) that guide an AI agent through real-world tasks. The best pack wins 100% of epoch rewards.
+
+**Step 1: Register on SN11**
+
 ```bash
-# 1. Clone repo
-git clone --recursive https://github.com/trajectoryRL/trajectoryrl.git
-cd trajectoryrl
+pip install bittensor
 
-# 2. Create your policy pack
-mkdir -p packs
-# Write packs/pack.json (see "How It Works" below)
+# Create wallet
+btcli wallet create --wallet-name miner
 
-# 3. Publish to GitHub
-# In your pack repo: git add pack.json && git commit && git push
+# Register (costs ~0.2 TAO burn fee)
+btcli subnets register --wallet-name miner --hotkey default --netuid 11
+```
 
-# 4. Configure
-cp .env.example .env
-# Edit .env: add WALLET_NAME, PACK_REPO, PACK_COMMIT
+**Step 2: Build your policy pack**
 
-# 5. Start miner
-docker compose --profile miner up -d
+```bash
+# Clone the repo (includes miner CLI tools)
+git clone --recursive https://github.com/trajectoryRL/trajectoryRL.git
+cd trajectoryRL
+pip install -e .
 
-# 6. View logs
-docker compose logs -f miner
+# Write your AGENTS.md — this is where your strategy lives
+# See "Policy Pack Format" below for the full spec
+
+# Build pack.json from your AGENTS.md
+python neurons/miner.py build --agents-md ./AGENTS.md --output pack.json
+
+# Validate locally
+python neurons/miner.py validate pack.json
+```
+
+**Step 3: Publish to GitHub**
+
+Your pack must be in a **public** GitHub repo before submitting. Validators verify server-side push timestamps to prevent copy-paste attacks.
+
+```bash
+# Create a public repo, e.g. github.com/yourname/my-sn11-pack
+cd /path/to/your-pack-repo
+cp /path/to/pack.json .
+git add pack.json
+git commit -m "my policy pack v1"
+git push origin main
+```
+
+**Step 4: Submit on-chain**
+
+```bash
+python neurons/miner.py submit pack.json \
+    --repo yourname/my-sn11-pack \
+    --git-commit $(git rev-parse HEAD) \
+    --wallet.name miner --wallet.hotkey default
+
+# Check your submission
+python neurons/miner.py status --wallet.name miner --wallet.hotkey default
+```
+
+**Step 5: Iterate**
+
+Improve your AGENTS.md, rebuild, push, and resubmit. The winner-take-all mechanism means you need to beat the current best score + 0.05 to take the lead.
+
+## Policy Pack Format
+
+A policy pack is an OPP v1 (OpenClaw Policy Pack) JSON file, max 32KB:
+
+```json
+{
+  "schema_version": 1,
+  "files": {
+    "AGENTS.md": "# Your agent instructions here...\n\nTell the agent how to handle emails, calendar, tasks, incidents, etc.",
+    "SOUL.md": "# Optional tone and boundaries..."
+  },
+  "tool_policy": {
+    "allow": ["exec", "slack", "memory_search", "web_search", "web_fetch", "read"],
+    "deny": ["group:runtime"]
+  },
+  "metadata": {
+    "pack_name": "my-pack",
+    "pack_version": "1.0.0"
+  }
+}
+```
+
+The `AGENTS.md` file is the core of your strategy. It gets injected into the AI agent's system prompt. A good AGENTS.md teaches the agent how to:
+- Triage and respond to emails efficiently
+- Handle calendar conflicts and scheduling
+- Synthesize information for standups and briefs
+- Escalate incidents safely (never leak confidential data)
+- Minimize tool calls while maximizing task completion
+
+### Scenarios Your Pack Will Be Evaluated On
+
+| Scenario | Weight | Description |
+|---|---|---|
+| `client_escalation` | 1.5x | P0 incident response — safety critical |
+| `inbox_to_action` | 1.5x | Email batch processing — efficiency critical |
+| `morning_brief` | 1.0x | Daily operating picture synthesis |
+| `team_standup` | 1.0x | Sprint status synthesis |
+| `inbox_triage` | 1.0x | Inbox review smoke test |
+
+### Miner CLI Commands
+
+```bash
+python neurons/miner.py build    --agents-md ./AGENTS.md -o pack.json   # Build pack
+python neurons/miner.py validate pack.json                               # Validate schema
+python neurons/miner.py submit   pack.json --repo user/repo             # Submit on-chain
+python neurons/miner.py status   --wallet.name miner                    # Check commitment
 ```
 
 ## Project Structure
 
 ```
 trajectoryrl/
-├── docker-compose.yml         # All-in-one: validator + ClawBench services
-├── .env.example               # Configuration template
-├── trajectoryrl/              # Main package
-│   ├── protocol/              # Bittensor synapses (PackRequest/PackResponse)
-│   ├── base/                  # Core classes (TrajectoryValidator)
-│   ├── utils/                 # ClawBench harness, config, GitHub verification
-│   └── scoring/               # Score aggregation, winner-take-all
-│
-├── neurons/                   # Entry points
-│   ├── validator.py           # python neurons/validator.py
-│   └── miner.py               # python neurons/miner.py
-│
-├── clawbench/                 # Git submodule — scenarios, fixtures, scoring
-├── openclaw/                  # Git submodule — AI gateway (Dockerfile.clawbench)
-│
-├── docker/                    # Dockerfiles (validator, miner)
-│   ├── Dockerfile.validator
+├── docker-compose.yml                  # Dev: validator + ClawBench services
+├── docker/
+│   ├── Dockerfile.validator            # Validator Docker image
+│   ├── docker-compose.validator.yml    # Production: validator + Watchtower
 │   └── Dockerfile.miner
+├── .github/workflows/
+│   └── build-validator.yml             # CI: build & push to GHCR on push to main
+├── .env.example                        # Configuration template
 │
-├── tests/                     # Test suite
-├── pyproject.toml             # Package definition
-└── README.md                  # This file
+├── trajectoryrl/                       # Main package
+│   ├── protocol/                       # Bittensor synapses (PackRequest/PackResponse)
+│   ├── base/                           # Core classes (TrajectoryValidator, TrajectoryMiner)
+│   ├── utils/                          # ClawBench harness, config, GitHub verification
+│   └── scoring/                        # Score aggregation, winner-take-all
+│
+├── neurons/                            # Entry points
+│   ├── validator.py                    # Validator (cold-start → production)
+│   └── miner.py                        # Miner CLI (build/validate/submit/status)
+│
+├── clawbench/                          # Git submodule — scenarios, fixtures, scoring
+├── openclaw/                           # Git submodule — AI gateway
+├── tests/                              # Test suite
+├── pyproject.toml                      # Package definition
+└── README.md                           # This file
 ```
-
-The `docker-compose.yml` automatically starts all required services:
-- **validator** — Evaluates miner packs and sets on-chain weights
-- **mock-tools** — Serves deterministic fixture data for ClawBench scenarios
-- **openclaw** — AI gateway that runs Claude with each pack's AGENTS.md
-- **miner** — (optional, `--profile miner`) Serves a policy pack via Bittensor
 
 ## How It Works
 
-### For Miners
+### Evaluation Pipeline (coming soon)
 
-1. **Create a policy pack** (OpenClaw Policy Pack - OPP v1 format):
-   ```json
-   {
-     "schema_version": 1,
-     "files": {
-       "AGENTS.md": "# Rules for the agent...",
-       "SOUL.md": "# Tone and boundaries..."
-     },
-     "tool_policy": {
-       "allow": ["exec", "slack", "memory_search"],
-       "deny": ["group:runtime"]
-     },
-     "metadata": {
-       "pack_name": "efficient_safe_ops",
-       "pack_version": "1.0.0"
-     }
-   }
-   ```
-
-2. **Publish to public GitHub repository**
-   - Commit your pack as `pack.json` in your repo
-   - Note the git commit hash (40-char SHA)
-
-3. **Submit via Bittensor Axon** (responds to `PackRequest`):
-   ```python
-   PackResponse(
-       pack_hash="sha256_of_pack_content",
-       git_commit_hash="abc123...",  # 40-char git SHA
-       repo_url="https://github.com/your_name/your_repo",
-       metadata={"pack_name": "efficient_safe_ops", "pack_version": "1.0.0"}
-   )
-   ```
-
-4. **Validators verify and evaluate** your pack via GitHub
-5. **Earn TAO** if you achieve the best score (winner-take-all)
-
-### For Validators
-
-1. **Query miners** for policy packs (receive `pack_hash`, `git_commit_hash`, `repo_url`)
-2. **Verify GitHub submission**:
-   - Clone/update miner's public repository
-   - Verify commit exists and extract pack
-   - Verify server-side push timestamp (via GitHub API) < on-chain submission time
-   - Verify `sha256(pack_json) == pack_hash`
-3. **Run ClawBench scenarios** (5 scenarios, weighted):
-   - `client_escalation` — P0 incident response (weight 1.5)
-   - `morning_brief` — Daily operating picture (weight 1.0)
-   - `inbox_to_action` — Email batch processing (weight 1.5)
-   - `team_standup` — Sprint status synthesis (weight 1.0)
-   - `inbox_triage` — Inbox review smoke test (weight 1.0)
-4. **Score results** (weighted aggregation with consensus):
-   ```
-   weighted_mean = Σ(w_i * s_i) / Σ(w_i)
-   final_score = quantize(weighted_mean - ρ * variance, step=0.05)
-   ```
-   Each scenario runs N=3 seeds with majority-vote consensus. Quantization to 0.05 grid ensures validator agreement.
-5. **Select winner** (winner-take-all with first-mover advantage):
-   - Best score wins IF it beats `first_best_score + δ` (δ = 0.05)
-   - Scores within ε = 0.02 are tied; tie goes to earliest push timestamp
-   - Protects early high-quality submissions from copy-paste attacks
-   - **Bootstrap phase** (< 10 miners): top 3 get 70% / 20% / 10% instead of WTA
-6. **Set on-chain weights** (steady state: winner = 1.0, others = 0.0)
+1. Validators read miner commitments from on-chain
+2. Fetch packs from public GitHub repos, verify hashes and push timestamps
+3. Run all 5 ClawBench scenarios with deterministic fixtures and regex scoring
+4. Score: `final = quantize(weighted_mean - 0.1 * variance, step=0.05)`
+5. Winner-take-all: best score gets 100% of epoch rewards
+6. First-mover advantage: later submissions must beat `best + 0.05` to win
+7. Bootstrap phase (< 10 miners): top 3 get 70% / 20% / 10%
 
 ## Scoring
 
@@ -339,37 +359,26 @@ NETWORK=local python neurons/validator.py --wallet.name test_validator
 
 ## Documentation
 
-- **[Validator Guide](docs/validator_guide.md)** — Setup and operation
-- **[Miner Guide](docs/miner_guide.md)** — Creating and optimizing packs
-- **[OPP Spec](docs/opp_spec.md)** — Policy pack format
-- **[Scoring](docs/scoring.md)** — How rewards are calculated
-- **[Architecture](docs/architecture.md)** — Technical deep-dive
+- **[Incentive Mechanism](INCENTIVE_MECHANISM.md)** — Scoring, rewards, and anti-copy protection
+- **[ClawBench](https://github.com/trajectoryRL/clawbench)** — Evaluation framework (scenarios, fixtures, scoring)
 
 ## Roadmap
 
-### v0.1.0 (complete)
-- [x] Validator implementation
-- [x] Consensus scoring (majority-vote N=3, quantization, epsilon tie-break)
-- [x] Epoch-seeded identity variation (35M+ contexts)
-- [x] Weighted scenario scoring (safety-critical scenarios = 1.5x)
-- [x] Bootstrap graduated rewards (70/20/10 when < 10 miners)
-- [x] OPP v1 pack schema with validation (32KB limit)
-- [x] GitHub push timestamp verification (server-side, not forgeable)
+### Cold-Start Phase (current)
+- [x] Validator and miner implementation
+- [x] Docker + Watchtower auto-deploy pipeline
+- [x] Consensus anchoring via owner validators
+- [ ] Onboard first external miners and validators
 
-### v0.2.0 (next)
-- [ ] Miner implementation
+### v1.0 (next)
+- [ ] Full ClawBench evaluation enabled
 - [ ] Example policy packs (baseline + optimized)
-- [ ] URL-based pack fetching (for packs > inline base64)
 - [ ] Pack cache with LRU eviction
 
-### v0.3.0 (planned)
-- [ ] **Hybrid LLM-as-judge scoring** — Use a fixed LLM model to evaluate semantic correctness and response quality alongside regex checks. Regex handles objective checks (safety, efficiency); LLM judge handles subjective checks (correctness, structure). Consensus maintained via: pinned model + binary pass/fail output + majority-vote over N=3 seeds + score quantization.
-- [ ] Anti-gaming defenses (AGENTS.md keyword blocklist, fixture name variation)
+### v2.0 (planned)
+- [ ] Hybrid LLM-as-judge scoring alongside regex checks
+- [ ] Anti-gaming defenses (keyword blocklist, fixture name variation)
 - [ ] Hidden held-out scenarios (scored but not published)
-
-### Future
-- [ ] Pack optimizer tools
-- [ ] Prometheus metrics and alerting
 - [ ] Web dashboard (scores, leaderboard, epoch history)
 
 ## Community
