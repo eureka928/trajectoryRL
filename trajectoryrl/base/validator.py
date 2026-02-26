@@ -123,7 +123,11 @@ class TrajectoryValidator:
         # current_winner_pack is never left as None after winner selection.
         self._pack_by_hash: Dict[str, dict] = {}
 
-        # Current winner tracking (for NCD comparison)
+        # Current winner tracking (for NCD comparison).
+        # Stays None until first epoch completes and a winner is selected.
+        # This is safe: on the first epoch there is no winner to copy, so
+        # NCD protection is not needed.  From epoch 2 onward, the winner
+        # pack persists in memory across epoch transitions.
         self.current_winner_pack: Optional[dict] = None
         self.current_winner_uid: Optional[int] = None
 
