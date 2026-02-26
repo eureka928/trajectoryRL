@@ -124,10 +124,12 @@ class TrajectoryValidator:
         self._pack_by_hash: Dict[str, dict] = {}
 
         # Current winner tracking (for NCD comparison).
-        # Persisted to disk so NCD protection survives validator restarts.
+        # Stays None until first epoch completes and a winner is selected.
+        # This is safe: on the first epoch there is no winner to copy, so
+        # NCD protection is not needed.  From epoch 2 onward, the winner
+        # pack persists in memory across epoch transitions.
         self.current_winner_pack: Optional[dict] = None
         self.current_winner_uid: Optional[int] = None
-        self._load_winner_pack()
 
         # Evaluated packs by UID (populated during epoch, used to set current_winner_pack)
         self._uid_packs: Dict[int, dict] = {}
@@ -787,7 +789,6 @@ class TrajectoryValidator:
             if winner_pack is not None:
                 self.current_winner_uid = winner_uid
                 self.current_winner_pack = winner_pack
-                self._save_winner_pack()
             else:
                 logger.debug(
                     f"Winner UID {winner_uid} not in local _uid_packs "
@@ -825,46 +826,6 @@ class TrajectoryValidator:
             logger.info("Weights set successfully")
         except Exception as e:
             logger.error(f"Error setting weights: {e}", exc_info=True)
-
-    # ------------------------------------------------------------------
-    # Winner pack persistence (survives validator restarts)
-    # ------------------------------------------------------------------
-
-    @property
-    def _winner_pack_path(self) -> Path:
-        return self.config.pack_cache_dir / "current_winner.json"
-
-    def _save_winner_pack(self):
-        """Persist current winner pack to disk for NCD protection across restarts."""
-        try:
-            data = {
-                "winner_uid": self.current_winner_uid,
-                "pack": self.current_winner_pack,
-            }
-            self._winner_pack_path.parent.mkdir(parents=True, exist_ok=True)
-            self._winner_pack_path.write_text(
-                json.dumps(data, sort_keys=True), encoding="utf-8"
-            )
-            logger.debug(f"Winner pack persisted to {self._winner_pack_path}")
-        except Exception as e:
-            logger.warning(f"Failed to persist winner pack: {e}")
-
-    def _load_winner_pack(self):
-        """Load persisted winner pack on startup so NCD works from first epoch."""
-        try:
-            if self._winner_pack_path.exists():
-                data = json.loads(
-                    self._winner_pack_path.read_text(encoding="utf-8")
-                )
-                self.current_winner_pack = data.get("pack")
-                self.current_winner_uid = data.get("winner_uid")
-                if self.current_winner_pack is not None:
-                    logger.info(
-                        f"Loaded persisted winner pack "
-                        f"(UID {self.current_winner_uid}) for NCD protection"
-                    )
-        except Exception as e:
-            logger.warning(f"Failed to load persisted winner pack: {e}")
 
     async def _set_uniform_weights(self):
         """Set uniform weights to stay active on-chain when no miners qualify.
