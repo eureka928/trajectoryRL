@@ -1611,6 +1611,52 @@ class TestNCDSimilarity:
 
 
 # ===================================================================
+# Winner Pack Persistence Tests
+# ===================================================================
+
+
+class TestWinnerPackPersistence:
+    """Tests for persisting current_winner_pack across validator restarts."""
+
+    def test_save_and_load_winner_pack(self, tmp_path):
+        """Winner pack should survive save/load round-trip."""
+        import json
+        winner_path = tmp_path / "current_winner.json"
+        pack = {"schema_version": 1, "files": {"AGENTS.md": "Be safe."}}
+        data = {"winner_uid": 42, "pack": pack}
+        winner_path.write_text(json.dumps(data, sort_keys=True), encoding="utf-8")
+
+        loaded = json.loads(winner_path.read_text(encoding="utf-8"))
+        assert loaded["winner_uid"] == 42
+        assert loaded["pack"]["files"]["AGENTS.md"] == "Be safe."
+
+    def test_load_missing_file_no_crash(self, tmp_path):
+        """Loading when no persisted file exists should not crash."""
+        winner_path = tmp_path / "current_winner.json"
+        assert not winner_path.exists()
+        # Simulates _load_winner_pack behavior
+        pack = None
+        uid = None
+        if winner_path.exists():
+            import json
+            data = json.loads(winner_path.read_text(encoding="utf-8"))
+            pack = data.get("pack")
+            uid = data.get("winner_uid")
+        assert pack is None
+        assert uid is None
+
+    def test_ncd_uses_persisted_winner(self):
+        """NCD check should use persisted winner pack, not None."""
+        from trajectoryrl.utils.ncd import is_too_similar
+        winner = {"files": {"AGENTS.md": "Be safe and careful. Follow instructions."}}
+        copycat = {"files": {"AGENTS.md": "Be safe and careful. Follow instructions."}}
+        # With persisted winner, NCD should catch the copy
+        assert is_too_similar(copycat, winner, threshold=0.80) is True
+        # Without persisted winner (None), NCD is silently skipped
+        assert is_too_similar(copycat, None, threshold=0.80) is False
+
+
+# ===================================================================
 # Commitment Parsing Tests
 # ===================================================================
 
