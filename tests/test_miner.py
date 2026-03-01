@@ -2,9 +2,7 @@
 
 import hashlib
 import json
-import os
 import subprocess
-import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -373,6 +371,28 @@ class TestGitPush:
         pack = TrajectoryMiner.build_pack(agents_md="# Test")
         result = TrajectoryMiner.git_push_pack(pack, str(tmp_path))
         assert result is None
+
+    def test_git_commit_includes_identity(self, tmp_path):
+        """git commit command includes -c user.email and -c user.name flags."""
+        (tmp_path / ".git").mkdir()  # Just enough to pass the .git exists check
+
+        pack = TrajectoryMiner.build_pack(agents_md="# Test")
+
+        with patch("trajectoryrl.base.miner.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(
+                returncode=0, stdout="a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2\n",
+            )
+            TrajectoryMiner.git_push_pack(pack, str(tmp_path))
+
+            # Find the commit call by looking for "commit" in the command
+            commit_cmds = [
+                call[0][0] for call in mock_run.call_args_list
+                if "commit" in call[0][0]
+            ]
+            assert len(commit_cmds) == 1, f"Expected 1 commit call, got {len(commit_cmds)}"
+            cmd = commit_cmds[0]
+            assert "user.email=miner@trajectoryrl.local" in cmd
+            assert "user.name=TrajectoryRL Miner" in cmd
 
     def test_writes_pack_json(self, tmp_path):
         """Pack is written to repo as pack.json."""
