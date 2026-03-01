@@ -340,7 +340,12 @@ class TrajectoryMiner:
                 cwd=repo_path, check=True, capture_output=True,
             )
             subprocess.run(
-                ["git", "commit", "-m", commit_message],
+                [
+                    "git",
+                    "-c", "user.email=miner@trajectoryrl.local",
+                    "-c", "user.name=TrajectoryRL Miner",
+                    "commit", "-m", commit_message,
+                ],
                 cwd=repo_path, check=True, capture_output=True,
             )
             subprocess.run(
