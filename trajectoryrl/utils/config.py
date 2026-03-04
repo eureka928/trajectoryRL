@@ -200,9 +200,6 @@ class MinerConfig:
         log_level: Logging level
         anthropic_api_key: API key for LLM pack generation (default mode)
         generator_model: Anthropic model for AGENTS.md generation
-        s3_bucket: S3 bucket for pack upload (default mode)
-        s3_key: S3 object key for the pack
-        s3_region: AWS region for S3
         pack_url: Pre-set pack URL (skips S3 upload if set)
     """
 
@@ -218,11 +215,6 @@ class MinerConfig:
     # LLM pack generation (default mode)
     anthropic_api_key: str = ""
     generator_model: str = "claude-sonnet-4-5-20250929"
-
-    # S3 upload (default mode)
-    s3_bucket: str = ""
-    s3_key: str = "pack.json"
-    s3_region: str = "us-east-1"
 
     # Pre-built pack URL (skips S3 upload if set)
     pack_url: str = ""
@@ -251,8 +243,5 @@ class MinerConfig:
             log_level=os.getenv("LOG_LEVEL", "INFO"),
             anthropic_api_key=os.getenv("ANTHROPIC_API_KEY", ""),
             generator_model=os.getenv("GENERATOR_MODEL", "claude-sonnet-4-5-20250929"),
-            s3_bucket=os.getenv("S3_BUCKET", ""),
-            s3_key=os.getenv("S3_KEY", "pack.json"),
-            s3_region=os.getenv("S3_REGION", "us-east-1"),
             pack_url=os.getenv("PACK_URL", ""),
         )

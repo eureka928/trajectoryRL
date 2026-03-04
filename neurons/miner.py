@@ -13,7 +13,7 @@ Run modes (long-running daemon):
 
 Config is loaded from .env.miner (or environment variables):
     WALLET_NAME, WALLET_HOTKEY, NETUID, NETWORK, CHECK_INTERVAL, LOG_LEVEL
-    ANTHROPIC_API_KEY, GENERATOR_MODEL, S3_BUCKET, S3_KEY, S3_REGION, PACK_URL
+    ANTHROPIC_API_KEY, GENERATOR_MODEL, S3_BUCKET, S3_ENDPOINT_URL, S3_REGION, PACK_URL
 """
 
 import argparse
@@ -136,23 +136,29 @@ async def _run_default(config: MinerConfig):
     """
     from trajectoryrl.base.miner import TrajectoryMiner
     from trajectoryrl.utils.pack_generator import generate_agents_md
-    from trajectoryrl.utils.s3_upload import upload_pack_to_s3
 
     # --- Config validation (fail fast) ---
     if not config.anthropic_api_key:
         logger.error("ANTHROPIC_API_KEY is required for default mode")
         sys.exit(1)
-    if not config.s3_bucket and not config.pack_url:
-        logger.error("Either S3_BUCKET or PACK_URL must be set for default mode")
-        sys.exit(1)
+
+    # Init storage (reads S3_BUCKET from env; raises ValueError if missing)
+    storage = None
+    if not config.pack_url:
+        from trajectoryrl.utils.oss_storage import OSSStorage
+        try:
+            storage = OSSStorage()
+        except ValueError as e:
+            logger.error("S3 not configured and PACK_URL not set: %s", e)
+            sys.exit(1)
 
     miner = _make_miner(config)
     interval = config.check_interval
 
     logger.info("=== Default mode ===")
     logger.info("  model:    %s", config.generator_model)
-    if config.s3_bucket:
-        logger.info("  upload:   s3://%s/%s", config.s3_bucket, config.s3_key)
+    if storage:
+        logger.info("  upload:   %s (bucket)", storage.bucket)
     else:
         logger.info("  pack_url: %s (you must upload pack yourself)", config.pack_url)
     logger.info("  interval: %ds", interval)
@@ -195,9 +201,12 @@ async def _run_default(config: MinerConfig):
                     continue
 
                 # Step 5: Upload (or save locally for manual upload)
-                if config.pack_url:
+                if storage:
+                    pack_url = await asyncio.to_thread(
+                        storage.upload_pack, pack,
+                    )
+                else:
                     pack_url = config.pack_url
-                    # Save locally so the user can deploy to their PACK_URL
                     local_path = "pack.json"
                     TrajectoryMiner.save_pack(pack, local_path)
                     logger.info(
@@ -205,14 +214,6 @@ async def _run_default(config: MinerConfig):
                         "validators fetch it",
                         local_path,
                         pack_url,
-                    )
-                else:
-                    pack_url = await asyncio.to_thread(
-                        upload_pack_to_s3,
-                        pack=pack,
-                        bucket=config.s3_bucket,
-                        key=config.s3_key,
-                        region=config.s3_region,
                     )
 
                 # Step 6: Submit on-chain

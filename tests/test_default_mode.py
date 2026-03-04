@@ -1,7 +1,7 @@
 """Integration tests for the default pack generator flow.
 
 Tests the full _run_default cycle: generate → build → validate → upload → submit
-with mocked external dependencies (Anthropic API, S3, bittensor).
+with mocked external dependencies (Anthropic API, OSSStorage, bittensor).
 """
 
 import asyncio
@@ -52,9 +52,6 @@ def _make_config(**overrides):
         log_level="WARNING",
         anthropic_api_key="sk-ant-test-key",
         generator_model="claude-sonnet-4-5-20250929",
-        s3_bucket="test-bucket",
-        s3_key="pack.json",
-        s3_region="us-east-1",
         pack_url="",
     )
     defaults.update(overrides)
@@ -70,6 +67,16 @@ def _fake_pack_hash(agents_md):
     from trajectoryrl.base.miner import TrajectoryMiner
     pack = TrajectoryMiner.build_pack(agents_md=agents_md.strip())
     return TrajectoryMiner.compute_pack_hash(pack)
+
+
+def _mock_storage():
+    """Create a mock OSSStorage that returns a fake URL."""
+    storage = MagicMock()
+    storage.bucket = "test-bucket"
+    storage.upload_pack = MagicMock(
+        return_value="https://test-bucket.s3.amazonaws.com/abc123.json"
+    )
+    return storage
 
 
 # ---------------------------------------------------------------------------
@@ -160,46 +167,57 @@ class TestPackGenerator:
                 generate_agents_md(api_key="sk-test")
 
 
-class TestS3Upload:
-    """Tests for upload_pack_to_s3()."""
+class TestOSSStorage:
+    """Tests for OSSStorage."""
 
-    def test_upload_returns_url(self):
-        """Upload returns the correct public URL."""
-        from trajectoryrl.base.miner import TrajectoryMiner
-        pack = TrajectoryMiner.build_pack(agents_md="# Test")
+    def test_missing_bucket_raises(self):
+        """OSSStorage raises ValueError if no bucket configured."""
+        with patch.dict("os.environ", {}, clear=True):
+            from trajectoryrl.utils.oss_storage import OSSStorage
+            with pytest.raises(ValueError, match="Bucket not configured"):
+                OSSStorage(bucket="")
 
-        with patch("boto3.client") as mock_boto:
-            from trajectoryrl.utils.s3_upload import upload_pack_to_s3
-            url = upload_pack_to_s3(pack, bucket="my-bucket", key="pack.json", region="us-west-2")
+    def test_build_url_aws(self):
+        """AWS S3 URL format (no custom endpoint)."""
+        from trajectoryrl.utils.oss_storage import OSSStorage
+        storage = OSSStorage(bucket="my-bucket", region="us-west-2")
+        assert storage._build_url("abc.json") == "https://my-bucket.s3.amazonaws.com/abc.json"
 
-        assert url == "https://my-bucket.s3.us-west-2.amazonaws.com/pack.json"
+    def test_build_url_custom_endpoint(self):
+        """Custom endpoint URL format (GCS, MinIO, R2)."""
+        from trajectoryrl.utils.oss_storage import OSSStorage
+        storage = OSSStorage(
+            bucket="my-bucket",
+            endpoint_url="https://storage.googleapis.com",
+        )
+        url = storage._build_url("abc.json")
+        assert url == "https://storage.googleapis.com/my-bucket/abc.json"
 
     def test_upload_sends_canonical_json(self):
         """Upload body matches compute_pack_hash serialization."""
         from trajectoryrl.base.miner import TrajectoryMiner
+        from trajectoryrl.utils.oss_storage import OSSStorage
+
         pack = TrajectoryMiner.build_pack(agents_md="# Test")
-        expected = json.dumps(pack, sort_keys=True).encode()
+        expected_body = json.dumps(pack, sort_keys=True).encode("utf-8")
 
-        with patch("boto3.client") as mock_boto:
-            from trajectoryrl.utils.s3_upload import upload_pack_to_s3
-            upload_pack_to_s3(pack, bucket="b", key="k")
+        mock_client = MagicMock()
+        mock_client.generate_presigned_url.return_value = "https://presigned.example.com/put"
 
-        put_call = mock_boto.return_value.put_object
-        put_call.assert_called_once()
-        assert put_call.call_args.kwargs["Body"] == expected
+        storage = OSSStorage(bucket="test-bucket")
+        storage._client = mock_client
 
-    def test_upload_sets_content_type_and_acl(self):
-        """Upload sets correct ContentType and ACL."""
-        from trajectoryrl.base.miner import TrajectoryMiner
-        pack = TrajectoryMiner.build_pack(agents_md="# Test")
+        with patch("urllib.request.urlopen") as mock_urlopen:
+            storage.upload_pack(pack)
 
-        with patch("boto3.client") as mock_boto:
-            from trajectoryrl.utils.s3_upload import upload_pack_to_s3
-            upload_pack_to_s3(pack, bucket="b", key="k")
+        # Verify presigned URL was requested
+        mock_client.generate_presigned_url.assert_called_once()
 
-        kwargs = mock_boto.return_value.put_object.call_args.kwargs
-        assert kwargs["ContentType"] == "application/json"
-        assert kwargs["ACL"] == "public-read"
+        # Verify the PUT request body is canonical JSON
+        req = mock_urlopen.call_args[0][0]
+        assert req.data == expected_body
+        assert req.get_method() == "PUT"
+        assert req.get_header("Content-type") == "application/json"
 
 
 class TestRunDefaultFlow:
@@ -209,21 +227,25 @@ class TestRunDefaultFlow:
     async def test_full_cycle_with_s3(self):
         """Full cycle: generate → build → validate → upload → submit."""
         config = _make_config()
+        mock_storage = _mock_storage()
 
         mock_response = MagicMock()
         mock_response.content = [MagicMock(text=FAKE_AGENTS_MD)]
 
+        mock_miner = MagicMock()
+        mock_miner.submit = MagicMock(return_value=True)
+        mock_miner.close = MagicMock()
+
         with (
             patch("anthropic.Anthropic") as MockAnthropic,
-            patch("boto3.client") as mock_boto,
-            patch("trajectoryrl.base.miner.TrajectoryMiner.submit_commitment", return_value=True),
-            patch("trajectoryrl.base.miner.TrajectoryMiner.get_current_commitment", return_value=None),
+            patch("neurons.miner._make_miner", return_value=mock_miner),
+            patch("neurons.miner._get_onchain_hash", return_value=None),
+            patch("trajectoryrl.utils.oss_storage.OSSStorage", return_value=mock_storage),
         ):
             MockAnthropic.return_value.messages.create.return_value = mock_response
 
             from neurons.miner import _run_default
 
-            # Run one iteration then cancel
             task = asyncio.create_task(_run_default(config))
             await asyncio.sleep(0.5)
             task.cancel()
@@ -235,28 +257,28 @@ class TestRunDefaultFlow:
             # Verify generate was called
             MockAnthropic.return_value.messages.create.assert_called()
 
-            # Verify S3 upload was called
-            mock_boto.return_value.put_object.assert_called()
-            s3_kwargs = mock_boto.return_value.put_object.call_args.kwargs
-            assert s3_kwargs["Bucket"] == "test-bucket"
-            assert s3_kwargs["Key"] == "pack.json"
+            # Verify storage upload was called
+            mock_storage.upload_pack.assert_called()
+
+            # Verify submit was called
+            mock_miner.submit.assert_called()
 
     @pytest.mark.asyncio
     async def test_full_cycle_with_pack_url(self):
         """With PACK_URL set, saves locally instead of S3 upload."""
-        config = _make_config(
-            s3_bucket="",
-            pack_url="https://myserver.com/pack.json",
-        )
+        config = _make_config(pack_url="https://myserver.com/pack.json")
 
         mock_response = MagicMock()
         mock_response.content = [MagicMock(text=FAKE_AGENTS_MD)]
 
+        mock_miner = MagicMock()
+        mock_miner.submit = MagicMock(return_value=True)
+        mock_miner.close = MagicMock()
+
         with (
             patch("anthropic.Anthropic") as MockAnthropic,
-            patch("boto3.client") as mock_boto,
-            patch("trajectoryrl.base.miner.TrajectoryMiner.submit_commitment", return_value=True),
-            patch("trajectoryrl.base.miner.TrajectoryMiner.get_current_commitment", return_value=None),
+            patch("neurons.miner._make_miner", return_value=mock_miner),
+            patch("neurons.miner._get_onchain_hash", return_value=None),
             patch("trajectoryrl.base.miner.TrajectoryMiner.save_pack") as mock_save,
         ):
             MockAnthropic.return_value.messages.create.return_value = mock_response
@@ -270,9 +292,6 @@ class TestRunDefaultFlow:
                 await task
             except asyncio.CancelledError:
                 pass
-
-            # S3 should NOT be called
-            mock_boto.return_value.put_object.assert_not_called()
 
             # save_pack should be called for local save
             mock_save.assert_called()
@@ -292,9 +311,9 @@ class TestRunDefaultFlow:
 
         with (
             patch("anthropic.Anthropic") as MockAnthropic,
-            patch("boto3.client"),
             patch("neurons.miner._make_miner", return_value=mock_miner),
             patch("neurons.miner._get_onchain_hash", return_value=expected_hash),
+            patch("trajectoryrl.utils.oss_storage.OSSStorage", return_value=_mock_storage()),
         ):
             MockAnthropic.return_value.messages.create.return_value = mock_response
 
@@ -314,18 +333,21 @@ class TestRunDefaultFlow:
     @pytest.mark.asyncio
     async def test_validation_failure_skips_submission(self):
         """If pack validation fails, skip upload and submission."""
-        # Generate content that will create a pack > 32KB (the size limit)
-        huge_content = "x" * 28_000  # Will be within AGENTS.md char limit but pack might still pass
         config = _make_config()
+        mock_storage = _mock_storage()
 
         mock_response = MagicMock()
-        mock_response.content = [MagicMock(text=huge_content)]
+        mock_response.content = [MagicMock(text="x" * 28_000)]
+
+        mock_miner = MagicMock()
+        mock_miner.submit = MagicMock(return_value=True)
+        mock_miner.close = MagicMock()
 
         with (
             patch("anthropic.Anthropic") as MockAnthropic,
-            patch("boto3.client") as mock_boto,
-            patch("trajectoryrl.base.miner.TrajectoryMiner.submit_commitment") as mock_submit,
-            patch("trajectoryrl.base.miner.TrajectoryMiner.get_current_commitment", return_value=None),
+            patch("neurons.miner._make_miner", return_value=mock_miner),
+            patch("neurons.miner._get_onchain_hash", return_value=None),
+            patch("trajectoryrl.utils.oss_storage.OSSStorage", return_value=mock_storage),
             patch("trajectoryrl.base.miner.TrajectoryMiner.validate") as mock_validate,
         ):
             from trajectoryrl.utils.opp_schema import ValidationResult
@@ -343,8 +365,8 @@ class TestRunDefaultFlow:
                 pass
 
             # Neither upload nor submit should be called
-            mock_boto.return_value.put_object.assert_not_called()
-            mock_submit.assert_not_called()
+            mock_storage.upload_pack.assert_not_called()
+            mock_miner.submit.assert_not_called()
 
 
 class TestConfigValidation:
@@ -356,27 +378,37 @@ class TestConfigValidation:
             asyncio.run(_run_default_sync(config))
 
     def test_missing_s3_and_url_exits(self):
-        config = _make_config(s3_bucket="", pack_url="")
-        with pytest.raises(SystemExit):
+        """No S3_BUCKET env var and no PACK_URL → exit."""
+        config = _make_config(pack_url="")
+        with (
+            patch.dict("os.environ", {"S3_BUCKET": ""}, clear=False),
+            pytest.raises(SystemExit),
+        ):
             asyncio.run(_run_default_sync(config))
 
     def test_s3_bucket_sufficient(self):
         """S3_BUCKET alone is sufficient (no PACK_URL needed)."""
-        config = _make_config(s3_bucket="my-bucket", pack_url="")
-        # Should not exit — will proceed to the loop
-        # We just test config validation passes by checking it reaches the miner init
+        config = _make_config(pack_url="")
+
+        mock_response = MagicMock()
+        mock_response.content = [MagicMock(text=FAKE_AGENTS_MD)]
+
+        mock_miner = MagicMock()
+        mock_miner.submit = MagicMock(return_value=True)
+        mock_miner.close = MagicMock()
+
         with (
-            patch("neurons.miner._make_miner") as mock_miner,
+            patch("neurons.miner._make_miner", return_value=mock_miner),
             patch("neurons.miner._get_onchain_hash", return_value=None),
-            patch("anthropic.Anthropic"),
-            patch("boto3.client"),
+            patch("trajectoryrl.utils.oss_storage.OSSStorage", return_value=_mock_storage()),
+            patch("anthropic.Anthropic") as MockAnthropic,
         ):
-            mock_miner.return_value.close = MagicMock()
+            MockAnthropic.return_value.messages.create.return_value = mock_response
 
             async def _run():
                 from neurons.miner import _run_default
                 task = asyncio.create_task(_run_default(config))
-                await asyncio.sleep(0.1)
+                await asyncio.sleep(0.3)
                 task.cancel()
                 try:
                     await task
@@ -384,22 +416,31 @@ class TestConfigValidation:
                     pass
 
             asyncio.run(_run())
-            mock_miner.assert_called_once()
+            mock_miner.submit.assert_called()
 
     def test_pack_url_sufficient(self):
         """PACK_URL alone is sufficient (no S3_BUCKET needed)."""
-        config = _make_config(s3_bucket="", pack_url="https://example.com/pack.json")
+        config = _make_config(pack_url="https://example.com/pack.json")
+
+        mock_response = MagicMock()
+        mock_response.content = [MagicMock(text=FAKE_AGENTS_MD)]
+
+        mock_miner = MagicMock()
+        mock_miner.submit = MagicMock(return_value=True)
+        mock_miner.close = MagicMock()
+
         with (
-            patch("neurons.miner._make_miner") as mock_miner,
+            patch("neurons.miner._make_miner", return_value=mock_miner),
             patch("neurons.miner._get_onchain_hash", return_value=None),
-            patch("anthropic.Anthropic"),
+            patch("anthropic.Anthropic") as MockAnthropic,
+            patch("trajectoryrl.base.miner.TrajectoryMiner.save_pack"),
         ):
-            mock_miner.return_value.close = MagicMock()
+            MockAnthropic.return_value.messages.create.return_value = mock_response
 
             async def _run():
                 from neurons.miner import _run_default
                 task = asyncio.create_task(_run_default(config))
-                await asyncio.sleep(0.1)
+                await asyncio.sleep(0.3)
                 task.cancel()
                 try:
                     await task
@@ -407,7 +448,8 @@ class TestConfigValidation:
                     pass
 
             asyncio.run(_run())
-            mock_miner.assert_called_once()
+            # Reached miner init (didn't exit on config validation)
+            mock_miner.submit.assert_called()
 
 
 async def _run_default_sync(config):
