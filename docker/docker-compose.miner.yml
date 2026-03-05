@@ -22,26 +22,6 @@ services:
     restart: unless-stopped
     command: ["python", "-u", "neurons/miner.py", "run", "--mode", "${MODE:-default}"]
     env_file: ../.env.miner
-    environment:
-      # --- Bittensor ---
-      - WALLET_NAME=${WALLET_NAME:-miner}
-      - WALLET_HOTKEY=${WALLET_HOTKEY:-default}
-      - NETUID=${NETUID:-11}
-      - NETWORK=${NETWORK:-finney}
-      # --- LLM generation (default mode) ---
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
-      - GENERATOR_MODEL=${GENERATOR_MODEL:-claude-sonnet-4-5-20250929}
-      # --- S3-compatible upload (default mode) ---
-      - S3_BUCKET=${S3_BUCKET:-}
-      - S3_REGION=${S3_REGION:-us-east-1}
-      - S3_ENDPOINT_URL=${S3_ENDPOINT_URL:-}
-      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-}
-      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-}
-      # --- Pre-set pack URL (skips S3 upload) ---
-      - PACK_URL=${PACK_URL:-}
-      # --- Daemon ---
-      - CHECK_INTERVAL=${CHECK_INTERVAL:-3600}
-      - LOG_LEVEL=${LOG_LEVEL:-INFO}
     volumes:
       - ~/.bittensor/wallets:/root/.bittensor/wallets:ro
       - miner-packs:/app/packs
