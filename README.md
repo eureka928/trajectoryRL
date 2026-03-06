@@ -46,6 +46,23 @@ TrajectoryRL is a Bittensor subnet where miners compete to optimize AI agent pol
 
 See [INCENTIVE_MECHANISM.md](INCENTIVE_MECHANISM.md) for full scoring, rewards, and anti-gaming details.
 
+### Example ROI (1,000 tasks/day)
+
+```
+Unoptimized Claude Opus 4.6:             $12,300/month
+
+Stage 1 — Prompt optimization (AGENTS.md tuning):
+  Optimized prompts + stop rules:         $3,300/month  (73% reduction)
+
+Stage 2 — Hybrid routing (AGENTS.md + injected skills):
+  Multi-LLM dynamic routing:               $900/month  (93% reduction)
+    ├─ Qwen 3.5 (Alibaba) handles 40% of sub-tasks (tool calls, lookups)
+    ├─ GLM-5 (Z.ai) handles 25% (structured extraction, formatting)
+    ├─ Gemini 3 Flash (Google) handles 20% (search, summarization)
+    ├─ GPT-5.2 (OpenAI) handles 10% (reasoning, drafting)
+    └─ Claude Opus 4.6 (Anthropic) handles 5% (complex judgment calls)
+```
+
 ## Quick Start
 
 ### For Validators
