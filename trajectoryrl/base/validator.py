@@ -951,6 +951,13 @@ class TrajectoryValidator:
         set_weights every tempo to avoid being deregistered by the chain.
         """
         try:
+            # Verify wallet is accessible before attempting on-chain call
+            _ = self.wallet.hotkey
+        except Exception:
+            logger.debug("Skipping fallback weights: wallet hotkey not available")
+            return
+
+        try:
             uids = [OWNER_UID]
             weights = [1.0]
 
