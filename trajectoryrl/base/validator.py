@@ -398,6 +398,7 @@ class TrajectoryValidator:
         """
         self._report_metadata: Dict[str, Any] = {}
         self._start_time = time.time()
+        self._last_report_time: float = 0.0
 
         logger.info("Starting validator main loop...")
         logger.info(
@@ -458,12 +459,15 @@ class TrajectoryValidator:
                     await self._compute_and_set_weights(current_block)
                     self.last_weight_block = current_block
 
-                await report_status(
-                    self.wallet,
-                    node_type="validator",
-                    uptime=int(time.time() - self._start_time),
-                    metadata=self._report_metadata or None,
-                )
+                now = time.time()
+                if now - self._last_report_time >= 600:
+                    await report_status(
+                        self.wallet,
+                        node_type="validator",
+                        uptime=int(now - self._start_time),
+                        metadata=self._report_metadata or None,
+                    )
+                    self._last_report_time = now
                 await asyncio.sleep(60)
 
             except KeyboardInterrupt:
@@ -473,6 +477,19 @@ class TrajectoryValidator:
             except Exception as e:
                 logger.error(f"Error in main loop: {e}", exc_info=True)
                 await asyncio.sleep(60)
+
+    # ------------------------------------------------------------------
+    # LLM key check
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _check_llm_keys() -> bool:
+        """Return True if at least one LLM API key is configured."""
+        import os
+        return bool(
+            os.environ.get("ANTHROPIC_API_KEY")
+            or os.environ.get("OPENAI_API_KEY")
+        )
 
     # ------------------------------------------------------------------
     # Evaluation cycle
@@ -488,7 +505,20 @@ class TrajectoryValidator:
         3. Evaluate marked packs on the full scenario set
         4. Update per-scenario EMA for evaluated packs
         5. Set weights from EMA scores
+
+        Falls back to owner UID weights when LLM keys are missing or
+        all evaluations fail (likely LLM API errors).
         """
+        if not self._check_llm_keys():
+            logger.warning(
+                "No LLM API key configured (ANTHROPIC_API_KEY / OPENAI_API_KEY). "
+                "Skipping evaluation, setting fallback weights to owner UID."
+            )
+            await self._set_fallback_weights(
+                reason="No LLM API key configured"
+            )
+            return
+
         # Epoch seed for context variation
         epoch = current_block // self.config.eval_interval_blocks
         epoch_seed = self.compute_epoch_seed(epoch, self.config.netuid)
@@ -524,6 +554,7 @@ class TrajectoryValidator:
         # 4. Determine which miners need evaluation
         eval_scenarios = sorted(self.scenarios.keys())
         evaluated_count = 0
+        attempted_count = 0
 
         for uid, commitment in active_commitments.items():
             hotkey = commitment.hotkey
@@ -538,6 +569,7 @@ class TrajectoryValidator:
                 )
                 continue
 
+            attempted_count += 1
             eval_result = await self._evaluate_miner(
                 uid, commitment, eval_scenarios, epoch_seed,
                 context_preamble, user_context,
@@ -565,7 +597,19 @@ class TrajectoryValidator:
                     if hotkey not in self.first_mover_data:
                         self.first_mover_data[hotkey] = (final, float(commitment.block_number))
 
-        logger.info(f"Evaluated {evaluated_count} miners this cycle")
+        logger.info(f"Evaluated {evaluated_count}/{attempted_count} miners this cycle")
+
+        # All attempted evaluations failed — likely an LLM API issue
+        if attempted_count > 0 and evaluated_count == 0:
+            logger.error(
+                f"All {attempted_count} miner evaluations failed. "
+                "Possible LLM API key issue or service outage. "
+                "Setting fallback weights to owner UID."
+            )
+            await self._set_fallback_weights(
+                reason="All evaluations failed (LLM error)"
+            )
+            return
 
         # 5. Set weights from EMA scores
         await self._compute_and_set_weights(current_block)
@@ -920,6 +964,9 @@ class TrajectoryValidator:
             }
             if uid in costs:
                 entry["cost"] = round(costs[uid], 4)
+            commitment = active.get(uid)
+            if commitment:
+                entry["pack_url"] = commitment.pack_url
             miner_scores[hk] = entry
         self._report_metadata["miner_scores"] = miner_scores
         self._report_metadata["miners_evaluated"] = len(miner_scores)
