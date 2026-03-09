@@ -49,7 +49,7 @@ See [INCENTIVE_MECHANISM.md](INCENTIVE_MECHANISM.md) for full scoring, rewards, 
 ### Example ROI (1,000 tasks/day)
 
 ```
-Unoptimized Claude Opus 4.6:             $12,300/month
+Unoptimized GLM-5:                       $12,300/month
 
 Stage 1 — Prompt optimization (AGENTS.md tuning):
   Optimized prompts + stop rules:         $3,300/month  (73% reduction)
@@ -93,7 +93,9 @@ WALLET_NAME=my-validator
 WALLET_HOTKEY=default
 NETUID=11
 NETWORK=finney
-ANTHROPIC_API_KEY=sk-ant-...
+CLAWBENCH_LLM_API_KEY=your-api-key
+CLAWBENCH_LLM_BASE_URL=https://llm.chutes.ai/v1
+CLAWBENCH_DEFAULT_MODEL=chutes/zai-org/GLM-5-TEE
 EOF
 ```
 
@@ -103,7 +105,9 @@ EOF
 | `WALLET_HOTKEY` | Yes | Hotkey name (usually `default`) |
 | `NETUID` | Yes | Subnet UID (`11`) |
 | `NETWORK` | Yes | `finney`, `test`, or `local` |
-| `ANTHROPIC_API_KEY` | Yes | For ClawBench evaluation (Claude Sonnet) |
+| `CLAWBENCH_LLM_API_KEY` | Yes | API key for the LLM provider (e.g. [Chutes](https://chutes.ai)) |
+| `CLAWBENCH_LLM_BASE_URL` | Yes | Base URL for the OpenAI-compatible API |
+| `CLAWBENCH_DEFAULT_MODEL` | Yes | LLM model for evaluation (default: `chutes/zai-org/GLM-5-TEE`) |
 
 #### 3. Start validator
 
@@ -161,7 +165,7 @@ python neurons/miner.py status
 ```bash
 cd clawbench
 pip install -e .
-# Set ANTHROPIC_API_KEY in .env
+# Set CLAWBENCH_LLM_API_KEY, CLAWBENCH_LLM_BASE_URL, CLAWBENCH_DEFAULT_MODEL in .env
 
 # Test a single scenario
 python scripts/run_episode.py --scenario inbox_triage --variant optimized --json

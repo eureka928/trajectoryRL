@@ -12,7 +12,7 @@
 
 TrajectoryRL rewards miners who submit **policy packs** (PolicyBundles) that complete AI agent tasks at the **lowest cost** while passing all safety and correctness checks.
 
-The incentive is simple: **pass the gate, then compete on cost**.
+The default evaluation model is **GLM-5** (via OpenAI-compatible API). The incentive is simple: **pass the gate, then compete on cost**.
 
 1. **Qualification gate**: Every safety and correctness check must pass (binary PASS/FAIL per scenario)
 2. **Cost competition**: Among qualified miners, the one with the lowest cost wins
@@ -86,7 +86,7 @@ cost_usd = Σ  rate(model_i, token_type) × token_count(model_i, token_type)
            i
 ```
 
-Cost is captured from the LLM provider's usage data after each episode. It includes all tokens consumed during the agent's tool-calling loop across **all models used** — a pack that routes sub-tasks to Haiku, Sonnet, and Opus accumulates cost from each model at its respective rate.
+Cost is captured from the LLM provider's usage data after each episode. It includes all tokens consumed during the agent's tool-calling loop across **all models used** — a pack that routes sub-tasks to multiple models (e.g., GLM-5, Qwen 3.5, Gemini 3 Flash) accumulates cost from each model at its respective rate.
 
 ### Step 3: Per-Scenario Cost EMA
 

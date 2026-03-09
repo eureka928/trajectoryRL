@@ -6,6 +6,7 @@ types, producing a generic policy that scores well across all five scenarios.
 
 Uses an OpenAI-compatible endpoint configured via ``LLM_API_KEY``,
 ``LLM_BASE_URL``, and ``LLM_MODEL`` environment variables.
+Default provider is Chutes (https://llm.chutes.ai/v1) with GLM-5.
 """
 
 import logging
@@ -104,7 +105,7 @@ Do NOT wrap the output in code fences.
 
 
 def generate_agents_md(
-    model: str = "glm-5",
+    model: str = "zai-org/GLM-5-TEE",
     api_key: str = "",
     base_url: str = "",
     previous_agents_md: Optional[str] = None,
