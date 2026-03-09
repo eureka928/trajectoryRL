@@ -57,7 +57,7 @@ done
 # ── 4. Start OpenClaw gateway (background) ──────────────────────
 echo "[entrypoint] Starting OpenClaw gateway on port 18789..."
 cd /app/openclaw
-node dist/index.js gateway --allow-unconfigured --bind lan &
+node dist/index.js gateway --allow-unconfigured --bind loopback &
 OPENCLAW_PID=$!
 cd /app
 
