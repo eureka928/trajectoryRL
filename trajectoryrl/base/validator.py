@@ -170,6 +170,10 @@ class TrajectoryValidator:
         # Timestamp of the most recent successful set_weights call
         self._last_set_weights_at: Optional[int] = None
 
+        # Last computed weights, cached for mid-eval tempo replays
+        self._last_weights_uids: Optional[List[int]] = None
+        self._last_weights: Optional[List[float]] = None
+
         # Load scenarios
         self.scenarios = self._load_scenarios()
         logger.info(
@@ -501,6 +505,14 @@ class TrajectoryValidator:
             )
             return
 
+        # Set weights from the previous eval's results before starting this
+        # eval cycle. This caches the computed weights for mid-eval replays,
+        # so the validator stays active on-chain even if eval takes longer
+        # than one tempo window.
+        logger.info("Setting weights from previous eval before starting eval cycle")
+        await self._compute_and_set_weights(current_block)
+        self.last_weight_block = current_block
+
         # Epoch seed for context variation
         epoch = current_block // self.config.eval_interval_blocks
         epoch_seed = self.compute_epoch_seed(epoch, self.config.netuid)
@@ -621,6 +633,18 @@ class TrajectoryValidator:
                     self._update_first_mover(
                         uid, hotkey, total_cost, float(commitment.block_number)
                     )
+
+            # Mid-eval tempo refresh: replay the last computed weights so
+            # the validator stays active on-chain without exposing partial
+            # current-cycle results.
+            mid_block = self.subtensor.get_current_block()
+            if mid_block - self.last_weight_block >= self.config.weight_interval_blocks:
+                logger.info(
+                    f"Mid-eval tempo refresh at block {mid_block} "
+                    f"({mid_block - self.last_weight_block} blocks since last set_weights)"
+                )
+                await self._replay_last_weights()
+                self.last_weight_block = mid_block
 
         logger.info(f"Evaluated {evaluated_count}/{attempted_count} miners this cycle")
 
@@ -1068,10 +1092,11 @@ class TrajectoryValidator:
     # ------------------------------------------------------------------
 
     async def _compute_and_set_weights(self, current_block: int):
-        """Compute weights from EMA scores and set on-chain.
+        """Compute weights from EMA scores, set on-chain, and cache the result.
 
         Maps hotkey -> UID via metagraph, applies winner selection,
-        and calls set_weights.
+        and calls set_weights. The resulting uids/weights are cached in
+        self._last_weights_uids / self._last_weights for mid-eval replays.
         """
         try:
             self.metagraph.sync(subtensor=self.subtensor)
@@ -1224,8 +1249,35 @@ class TrajectoryValidator:
                 )
                 logger.info("Weights set successfully")
                 self._last_set_weights_at = int(time.time())
+                self._last_weights_uids = uids
+                self._last_weights = weights
             except Exception as e:
                 logger.error(f"Error setting weights: {e}", exc_info=True)
+
+    async def _replay_last_weights(self):
+        """Re-set the last computed weights on-chain without recomputing.
+
+        Used for mid-eval tempo refreshes to keep the validator active
+        while eval is still running. Falls back to fallback weights if
+        no previous weights are cached.
+        """
+        if self._last_weights_uids is None or self._last_weights is None:
+            logger.info("No cached weights to replay, setting fallback weights")
+            await self._set_fallback_weights(reason="No cached weights for replay")
+            return
+        try:
+            self.subtensor.set_weights(
+                netuid=self.config.netuid,
+                wallet=self.wallet,
+                uids=self._last_weights_uids,
+                weights=self._last_weights,
+                wait_for_inclusion=True,
+                wait_for_finalization=False,
+            )
+            logger.info("Replayed last weights successfully")
+            self._last_set_weights_at = int(time.time())
+        except Exception as e:
+            logger.error(f"Error replaying weights: {e}", exc_info=True)
 
     async def _set_fallback_weights(self, reason: str = "No eligible miners"):
         """Set weights to subnet owner UID when no miners qualify.
