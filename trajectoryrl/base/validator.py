@@ -732,7 +732,6 @@ class TrajectoryValidator:
             hotkey = commitment.hotkey
             last_block = self.last_eval_block.get(hotkey)
 
-            # Never evaluated = not yet active (but will be evaluated this cycle)
             if last_block is not None:
                 blocks_since = current_block - last_block
                 if blocks_since > self.config.inactivity_blocks:
