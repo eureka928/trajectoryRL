@@ -149,6 +149,8 @@ async def submit_eval(
     eval_count: Optional[int] = None,
     ema_reset: Optional[bool] = None,
     scenario_results: Optional[Dict[str, Any]] = None,
+    llm_base_url: Optional[str] = None,
+    llm_model: Optional[str] = None,
     submit_url: str = DEFAULT_SUBMIT_URL,
 ) -> bool:
     """Submit a single miner eval result to the dashboard API.
@@ -195,6 +197,10 @@ async def submit_eval(
         payload["ema_reset"] = ema_reset
     if scenario_results is not None:
         payload["scenario_results"] = scenario_results
+    if llm_base_url is not None:
+        payload["llm_base_url"] = llm_base_url
+    if llm_model is not None:
+        payload["llm_model"] = llm_model
 
     try:
         async with httpx.AsyncClient() as client:

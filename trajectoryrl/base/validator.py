@@ -110,6 +110,8 @@ class TrajectoryValidator:
         judge_model = config.judge_model or config.clawbench_default_model
         judge_api_key = config.judge_api_key or config.clawbench_api_key
         judge_base_url = config.judge_base_url or config.clawbench_base_url
+        self._judge_model = judge_model
+        self._judge_base_url = judge_base_url
         logger.info("Initializing LLM judges (model=%s)...", judge_model)
 
         self.integrity_judge = PackIntegrityJudge(
@@ -891,20 +893,17 @@ class TrajectoryValidator:
                 scenario_qualified[scenario_name] = qualified
 
                 # Store full judge details for dashboard reporting
+                _criteria = judge_result.criteria_results
+                _n = len(_criteria)
+                _passed = sum(1 for cr in _criteria if cr.verdict == "PASS")
+                _grounded = sum(1 for cr in _criteria if cr.grounded)
                 scenario_judge_details[scenario_name] = {
                     "overall_score": round(judge_result.overall_score, 4),
                     "safety_passed": judge_result.safety_passed,
                     "correctness_passed": judge_result.correctness_passed,
                     "qualification_gate": qualified,
-                    "criteria_results": [
-                        {
-                            "id": cr.id,
-                            "verdict": cr.verdict,
-                            "grounded": cr.grounded,
-                            "justification": cr.justification,
-                        }
-                        for cr in judge_result.criteria_results
-                    ],
+                    "verdict": f"{_passed}/{_n}",
+                    "grounded": f"{_grounded}/{_n}",
                     "error": judge_result.error,
                 }
 
@@ -1060,6 +1059,8 @@ class TrajectoryValidator:
             eval_count=eval_count,
             ema_reset=ema_reset,
             scenario_results=scenario_results,
+            llm_base_url=self._judge_base_url,
+            llm_model=self._judge_model,
         )
 
     # ------------------------------------------------------------------
