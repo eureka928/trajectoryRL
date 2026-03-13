@@ -1339,14 +1339,17 @@ class TestValidatorConfig:
     def test_default_scoring_params(self):
         from trajectoryrl.utils.config import ValidatorConfig
         defaults = ValidatorConfig.__dataclass_fields__
-        assert defaults["rho_reliability"].default == 0.1
         assert defaults["delta_threshold"].default == 0.05
         assert defaults["seeds_per_task"].default == 1
         assert defaults["eval_interval_blocks"].default == 7200
-        assert defaults["ema_alpha"].default == 0.3
+        assert defaults["cost_ema_alpha"].default == 0.3
         assert defaults["similarity_threshold"].default == 0.80
         assert defaults["inactivity_blocks"].default == 14400
         assert defaults["weight_interval_blocks"].default == 360
+        # v4.0: LLM judge config fields exist
+        assert "judge_model" in defaults
+        assert "judge_api_key" in defaults
+        assert "judge_base_url" in defaults
 
     def test_no_github_fields(self):
         """Verify github_token and validator_scores_fork_url are removed."""
@@ -1639,7 +1642,6 @@ class TestPerScenarioEMA:
             validator.config = config
             validator.metagraph = mock_metagraph
             validator.subtensor = mock_subtensor
-            validator.ema_scores = {}
             validator.ema_costs = {}
             validator.scenario_qualified = {}
             validator._ema_pack_hash = {}
@@ -1648,6 +1650,10 @@ class TestPerScenarioEMA:
             validator._hotkey_uid_map = {}
             validator._hotkey_packs = {}
             validator._pack_by_hash = {}
+            validator._eval_counts = {}
+            validator._scenario_config_hash = ""
+            validator.latest_token_usage = {}
+            validator.latest_model_usage = {}
             validator.current_winner_pack = None
             validator.current_winner_hotkey = None
             validator.scenarios = {
@@ -1658,78 +1664,13 @@ class TestPerScenarioEMA:
                 rho_reliability=0.1, consensus_epsilon=0.02
             )
 
+            # Mock LLM judges (v4.0)
+            validator.integrity_judge = MagicMock()
+            validator.integrity_judge.dump_cache.return_value = {}
+            validator.integrity_judge.load_cache = MagicMock()
+            validator.trajectory_judge = MagicMock()
+
             return validator
-
-    def test_ema_first_observation(self):
-        """First observation sets EMA directly (no smoothing)."""
-        v = self._make_validator()
-        v._update_ema("hk_0", "hash_a", {
-            "client_escalation": 0.90,
-            "morning_brief": 0.80,
-        })
-        assert v.ema_scores["hk_0"]["client_escalation"] == 0.90
-        assert v.ema_scores["hk_0"]["morning_brief"] == 0.80
-
-    def test_ema_smoothing(self):
-        """Second observation applies EMA smoothing: α*new + (1-α)*old."""
-        v = self._make_validator()
-        v._update_ema("hk_0", "hash_a", {
-            "client_escalation": 1.0,
-            "morning_brief": 0.80,
-        })
-        v._update_ema("hk_0", "hash_a", {
-            "client_escalation": 0.70,
-            "morning_brief": 0.90,
-        })
-        # α=0.3: 0.3*0.70 + 0.7*1.0 = 0.21 + 0.70 = 0.91
-        assert abs(v.ema_scores["hk_0"]["client_escalation"] - 0.91) < 1e-6
-        # α=0.3: 0.3*0.90 + 0.7*0.80 = 0.27 + 0.56 = 0.83
-        assert abs(v.ema_scores["hk_0"]["morning_brief"] - 0.83) < 1e-6
-
-    def test_ema_resets_on_pack_change(self):
-        """When pack_hash changes, EMA resets for that hotkey."""
-        v = self._make_validator()
-        v._update_ema("hk_0", "hash_a", {
-            "client_escalation": 0.90,
-        })
-        assert v.ema_scores["hk_0"]["client_escalation"] == 0.90
-
-        # New pack hash → EMA resets
-        v._update_ema("hk_0", "hash_b", {
-            "client_escalation": 0.70,
-        })
-        # Should be 0.70 (fresh start), not smoothed from 0.90
-        assert v.ema_scores["hk_0"]["client_escalation"] == 0.70
-
-    def test_ema_independent_per_hotkey(self):
-        """EMA state is independent per hotkey."""
-        v = self._make_validator()
-        v._update_ema("hk_0", "hash_a", {"client_escalation": 0.90})
-        v._update_ema("hk_1", "hash_b", {"client_escalation": 0.70})
-
-        assert v.ema_scores["hk_0"]["client_escalation"] == 0.90
-        assert v.ema_scores["hk_1"]["client_escalation"] == 0.70
-
-    def test_compute_final_score_from_ema(self):
-        """Final score from EMA: weighted_mean - ρ*weighted_variance."""
-        v = self._make_validator()
-        v.ema_scores["hk_0"] = {
-            "client_escalation": 0.90,
-            "morning_brief": 0.80,
-        }
-        # weights: client_escalation=1.5, morning_brief=1.0
-        # weighted_mean = (1.5*0.90 + 1.0*0.80) / 2.5 = (1.35 + 0.80) / 2.5 = 0.86
-        # weighted_var = (1.5*(0.90-0.86)^2 + 1.0*(0.80-0.86)^2) / 2.5
-        #             = (1.5*0.0016 + 1.0*0.0036) / 2.5
-        #             = (0.0024 + 0.0036) / 2.5 = 0.0024
-        # final = 0.86 - 0.1*0.0024 = 0.85976
-        final = v.compute_final_score_from_ema("hk_0")
-        assert abs(final - 0.85976) < 1e-4
-
-    def test_compute_final_score_empty_ema(self):
-        """Empty EMA returns 0."""
-        v = self._make_validator()
-        assert v.compute_final_score_from_ema("hk_unknown") == 0.0
 
     def test_needs_evaluation_new_miner(self):
         """New miner (never evaluated) needs evaluation."""
@@ -1758,10 +1699,9 @@ class TestPerScenarioEMA:
         assert v._needs_evaluation("hk_0", "hash_a", 100000) is True
 
     def test_ema_persistence_roundtrip(self):
-        """EMA state v2 can be saved and loaded."""
+        """EMA state can be saved and loaded (v4.0: no score EMA)."""
         v = self._make_validator()
         v._scenario_config_hash = "test_hash"
-        v.ema_scores = {"hk_0": {"client_escalation": 0.85}}
         v.ema_costs = {"hk_0": {"client_escalation": 0.042}}
         v.scenario_qualified = {"hk_0": {"client_escalation": True}}
         v._ema_pack_hash = {"hk_0": "hash_a"}
@@ -1780,7 +1720,6 @@ class TestPerScenarioEMA:
             v2._scenario_config_hash = "test_hash"
             v2._load_ema_state()
 
-            assert v2.ema_scores == {"hk_0": {"client_escalation": 0.85}}
             assert v2.ema_costs == {"hk_0": {"client_escalation": 0.042}}
             assert v2.scenario_qualified == {"hk_0": {"client_escalation": True}}
             assert v2._ema_pack_hash == {"hk_0": "hash_a"}
@@ -1793,7 +1732,6 @@ class TestPerScenarioEMA:
         """Cost EMA tracks per-scenario costs."""
         v = self._make_validator()
         v._update_ema("hk_0", "hash_a",
-            scenario_scores={"client_escalation": 0.90},
             scenario_costs={"client_escalation": 0.050},
             scenario_qualified={"client_escalation": True},
         )
@@ -1804,11 +1742,9 @@ class TestPerScenarioEMA:
         """Cost EMA applies smoothing on second observation."""
         v = self._make_validator()
         v._update_ema("hk_0", "hash_a",
-            scenario_scores={"client_escalation": 0.90},
             scenario_costs={"client_escalation": 0.050},
         )
         v._update_ema("hk_0", "hash_a",
-            scenario_scores={"client_escalation": 0.85},
             scenario_costs={"client_escalation": 0.030},
         )
         # α=0.3: 0.3*0.030 + 0.7*0.050 = 0.009 + 0.035 = 0.044
@@ -1818,11 +1754,9 @@ class TestPerScenarioEMA:
         """Cost EMA resets when pack changes."""
         v = self._make_validator()
         v._update_ema("hk_0", "hash_a",
-            scenario_scores={"client_escalation": 0.90},
             scenario_costs={"client_escalation": 0.050},
         )
         v._update_ema("hk_0", "hash_b",
-            scenario_scores={"client_escalation": 0.85},
             scenario_costs={"client_escalation": 0.030},
         )
         # Fresh start after pack change
@@ -1889,7 +1823,7 @@ class TestPerScenarioEMA:
         """Loading EMA state with different scenario config invalidates all state."""
         v = self._make_validator()
         v._scenario_config_hash = "old_hash"
-        v.ema_scores = {"hk_0": {"client_escalation": 0.85}}
+        v.ema_costs = {"hk_0": {"client_escalation": 0.042}}
         v._ema_pack_hash = {"hk_0": "hash_a"}
 
         with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
@@ -1904,7 +1838,7 @@ class TestPerScenarioEMA:
             v2._scenario_config_hash = "new_hash"
             v2._load_ema_state()
 
-            assert v2.ema_scores == {}
+            assert v2.ema_costs == {}
             assert v2._ema_pack_hash == {}
         finally:
             v.config.ema_state_path.unlink(missing_ok=True)
@@ -1944,7 +1878,6 @@ class TestInactivityBlocks:
             config.eval_interval_blocks = 7200
             config.similarity_threshold = 0.80
             config.weight_interval_blocks = 360
-            config.ema_alpha = 0.3
             config.cost_ema_alpha = 0.3
             config.cost_delta = 0.10
             config.required_categories = ["safety", "correctness"]
@@ -1964,7 +1897,6 @@ class TestInactivityBlocks:
             validator.config = config
             validator.metagraph = mock_metagraph
             validator.subtensor = mock_subtensor
-            validator.ema_scores = {}
             validator.ema_costs = {}
             validator.scenario_qualified = {}
             validator._ema_pack_hash = {}
@@ -1973,8 +1905,14 @@ class TestInactivityBlocks:
             validator._hotkey_uid_map = {}
             validator._hotkey_packs = {}
             validator._pack_by_hash = {}
+            validator._eval_counts = {}
+            validator.latest_token_usage = {}
+            validator.latest_model_usage = {}
             validator.current_winner_pack = None
             validator.current_winner_hotkey = None
+            validator.integrity_judge = MagicMock()
+            validator.integrity_judge.dump_cache.return_value = {}
+            validator.trajectory_judge = MagicMock()
 
             return validator
 
