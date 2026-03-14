@@ -7,6 +7,7 @@ import math
 import os
 import shutil
 import subprocess
+import sys
 import yaml
 from pathlib import Path
 from typing import Dict, Any, List, Optional
@@ -463,7 +464,7 @@ class ClawBenchHarness:
             raise ValueError(f"run_episode.py not found: {run_script}")
 
         cmd = [
-            "python",
+            sys.executable,
             str(run_script),
             "--scenario", scenario_name,
             "--workspace", str(workspace),
