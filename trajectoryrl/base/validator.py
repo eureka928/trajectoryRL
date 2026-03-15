@@ -47,7 +47,6 @@ logger = logging.getLogger(__name__)
 OWNER_UID = 74
 BURN_FRACTION = 0.50  # 50% of miner emissions burned via owner UID
 EVAL_START_BLOCK = 0
-# TODO: Set SHADOW_MODE = False for official mainnet launch.
 # Shadow mode runs real evals and logs results, but always sets weights to owner UID 74.
 SHADOW_MODE = False
 
