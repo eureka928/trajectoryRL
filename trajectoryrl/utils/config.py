@@ -92,9 +92,7 @@ class ValidatorConfig:
     similarity_threshold: float = 0.80
 
     # Coldkey blacklist: miners under these coldkeys are skipped entirely
-    coldkey_blacklist: List[str] = field(default_factory=lambda: [
-        "5D4twvHRJL3whw7DwHTDbn8i1nR845Gq9rhAYgHfP7CiryrC",
-    ])
+    coldkey_blacklist: List[str] = field(default_factory=list)
 
     # Inactivity tracking (block-based)
     inactivity_blocks: int = 14400  # ~48 hours at 12s/block
