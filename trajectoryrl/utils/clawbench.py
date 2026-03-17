@@ -520,7 +520,7 @@ class ClawBenchHarness:
             # Parse JSON output
             output = stdout.decode()
             result_data = self._parse_episode_output(output)
-            logger.info(f"Result data: {result_data}")
+            #logger.info(f"Result data: {result_data}")
 
             # Extract scoring results
             # New format: checks_passed/checks_total (no "score" field)
@@ -553,6 +553,12 @@ class ClawBenchHarness:
                 if models and isinstance(models, list):
                     model_usage = models
 
+            logger.info(
+                f"Evaluation result for {scenario_name}: "
+                f"score={score}, success={success}, tool_calls={tool_calls}, "
+                f"cost_usd={cost_usd}, token_usage={token_usage}, "
+                f"model_usage={model_usage}"
+            )
             return EvaluationResult(
                 scenario_name=scenario_name,
                 score=score,

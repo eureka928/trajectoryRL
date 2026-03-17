@@ -10,7 +10,9 @@
 
 set -euo pipefail
 
-echo "[entrypoint] TrajectoryRL Validator (all-in-one)"
+log() { echo "$(date -u '+%Y-%m-%dT%H:%M:%S%z') [entrypoint] $*"; }
+
+log "TrajectoryRL Validator (all-in-one)"
 
 # ── 1. Environment setup ────────────────────────────────────────
 # Paths for init_workspace.py (override legacy Docker volume mount defaults)
@@ -38,7 +40,7 @@ CLAWBENCH_REPO="${CLAWBENCH_REPO:-https://github.com/trajectoryRL/clawbench.git}
 CLAWBENCH_BRANCH="${CLAWBENCH_BRANCH:-main}"
 
 if [ ! -d /app/clawbench/.git ]; then
-    echo "[entrypoint] Cloning ClawBench ($CLAWBENCH_BRANCH)..."
+    log "Cloning ClawBench ($CLAWBENCH_BRANCH)..."
     if git clone --depth 1 -b "$CLAWBENCH_BRANCH" "$CLAWBENCH_REPO" /app/clawbench_tmp; then
         # Preserve any local config the Dockerfile may have added
         rm -rf /app/clawbench
@@ -46,55 +48,62 @@ if [ ! -d /app/clawbench/.git ]; then
         # Install any new Python deps from the fresh clone
         pip install --no-cache-dir -q -r /app/clawbench/requirements.txt 2>/dev/null || true
         pip install --no-cache-dir -q -r /app/clawbench/requirements-mock.txt 2>/dev/null || true
-        echo "[entrypoint] ClawBench cloned successfully"
+        log "ClawBench cloned successfully"
     else
-        echo "[entrypoint] WARNING: ClawBench clone failed — using COPY'd version"
+        log "WARNING: ClawBench clone failed — using COPY'd version"
     fi
 else
-    echo "[entrypoint] Pulling latest ClawBench..."
+    log "Pulling latest ClawBench..."
     (cd /app/clawbench && git pull --ff-only origin "$CLAWBENCH_BRANCH") || \
-        echo "[entrypoint] WARNING: ClawBench pull failed — using current version"
+        log "WARNING: ClawBench pull failed — using current version"
 fi
 
 # ── 3. Init workspace (one-shot) ────────────────────────────────
-echo "[entrypoint] Initializing workspace..."
+log "Initializing workspace..."
 mkdir -p "$WORKSPACE_DIR" "$OPENCLAW_HOME"
 python /app/clawbench/scripts/init_workspace.py
 
 chmod -R 777 "$WORKSPACE_DIR"
-echo "[entrypoint] Workspace ready"
+log "Workspace ready"
 
 # ── 4. Start mock-tools server (background) ─────────────────────
-echo "[entrypoint] Starting mock-tools on port 3001..."
-python -m mock_tools.server &
+# Logs are redirected to separate files so they don't pollute the
+# main validator output.  Inspect these files when debugging tool calls.
+SUBMODULE_LOG_DIR="${LOG_DIR:-/app/logs}/submodules"
+mkdir -p "$SUBMODULE_LOG_DIR"
+
+log "Starting mock-tools on port 3001..."
+log "  mock-tools logs → $SUBMODULE_LOG_DIR/mock-tools.log"
+python -m mock_tools.server >> "$SUBMODULE_LOG_DIR/mock-tools.log" 2>&1 &
 MOCK_PID=$!
 
 for i in $(seq 1 30); do
     if python -c "import urllib.request; urllib.request.urlopen('http://localhost:3001/health')" 2>/dev/null; then
-        echo "[entrypoint] mock-tools ready"
+        log "mock-tools ready"
         break
     fi
     if [ "$i" -eq 30 ]; then
-        echo "[entrypoint] ERROR: mock-tools failed to start within 30s"
+        log "ERROR: mock-tools failed to start within 30s"
         exit 1
     fi
     sleep 1
 done
 
 # ── 5. Start OpenClaw gateway (background) ──────────────────────
-echo "[entrypoint] Starting OpenClaw gateway on port 18789..."
+log "Starting OpenClaw gateway on port 18789..."
+log "  openclaw logs → $SUBMODULE_LOG_DIR/openclaw-gateway.log"
 cd /app/openclaw
-node dist/index.js gateway --allow-unconfigured --bind loopback &
+node dist/index.js gateway --allow-unconfigured --bind loopback >> "$SUBMODULE_LOG_DIR/openclaw-gateway.log" 2>&1 &
 OPENCLAW_PID=$!
 cd /app
 
 for i in $(seq 1 60); do
     if curl -sf http://localhost:18789/health >/dev/null 2>&1; then
-        echo "[entrypoint] OpenClaw gateway ready"
+        log "OpenClaw gateway ready"
         break
     fi
     if [ "$i" -eq 60 ]; then
-        echo "[entrypoint] ERROR: OpenClaw gateway failed to start within 60s"
+        log "ERROR: OpenClaw gateway failed to start within 60s"
         exit 1
     fi
     sleep 1
@@ -102,12 +111,12 @@ done
 
 # ── 6. Signal handling ──────────────────────────────────────────
 cleanup() {
-    echo "[entrypoint] Shutting down..."
+    log "Shutting down..."
     kill "$MOCK_PID" "$OPENCLAW_PID" 2>/dev/null || true
     wait "$MOCK_PID" "$OPENCLAW_PID" 2>/dev/null || true
 }
 trap cleanup EXIT INT TERM
 
 # ── 7. Start validator (foreground) ─────────────────────────────
-echo "[entrypoint] Starting validator..."
+log "Starting validator..."
 exec python -u neurons/validator.py "$@"

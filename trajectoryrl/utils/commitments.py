@@ -126,10 +126,19 @@ def fetch_all_commitments(
             block_number=block_number,
             raw=raw,
         )
-        logger.info(
+        logger.debug(
             f"UID {uid}: commitment found — hash={pack_hash[:12]}… "
             f"url={pack_url} block={block_number}"
         )
+
+    if commitments:
+        uids = sorted(commitments.keys())
+        logger.info(
+            f"Fetched {len(commitments)} commitments "
+            f"(UIDs: {uids[0]}–{uids[-1]})"
+        )
+    else:
+        logger.info("Fetched 0 commitments")
 
     return commitments
 
