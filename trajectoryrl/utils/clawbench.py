@@ -408,10 +408,11 @@ class ClawBenchHarness:
                     child.unlink()
         else:
             workspace.mkdir(parents=True, exist_ok=True)
-        # OpenClaw runs as a non-root user in Docker and may create transient
-        # files (e.g. SOUL.md). Ensure the workspace is writable.
+        # OpenClaw may run as a non-root user in Docker. Ensure the workspace
+        # is at least world-readable/traversable so the container can read pack
+        # files without making miner-supplied content world-writable.
         try:
-            workspace.chmod(0o777)
+            workspace.chmod(0o755)
         except OSError:
             logger.debug(f"Could not chmod workspace dir: {workspace}")
         workspace_abs = workspace.resolve()
@@ -434,10 +435,11 @@ class ClawBenchHarness:
                 continue
             file_path.parent.mkdir(parents=True, exist_ok=True)
             file_path.write_text(content)
-            # Keep generated paths writable/readable by non-root container user.
+            # Ensure generated paths are readable by a non-root container user
+            # without making miner-supplied content world-writable.
             try:
-                file_path.parent.chmod(0o777)
-                file_path.chmod(0o666)
+                file_path.parent.chmod(0o755)
+                file_path.chmod(0o644)
             except OSError:
                 logger.debug(f"Could not chmod generated file: {file_path}")
             logger.debug(f"Wrote {filename} ({len(content)} chars)")
